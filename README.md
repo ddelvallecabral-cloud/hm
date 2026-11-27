@@ -74,46 +74,71 @@ las migraciones hacen trazables los cambios del esquema.
 
 ## Levantar el proyecto
 
-### Opción A — Docker (recomendada)
+### Opción A — Instalador (recomendada, macOS / Linux)
 
 Requisitos: [Docker Desktop](https://www.docker.com/products/docker-desktop/)
-abierto y Git. En macOS los comandos van en la app Terminal; en Windows, en PowerShell.
+abierto y en estado *Running*, y Git (en macOS viene con las herramientas de
+desarrollo: la primera vez que se usa `git`, el sistema ofrece instalarlas).
 
-1. Descargar el proyecto:
+En la app **Terminal**:
 
 ```bash
-git clone https://github.com/ddelvallecabral-cloud/hm.git
+cd ~ && git clone https://github.com/ddelvallecabral-cloud/hm.git crm-tesoreria
 ```
 
 ```bash
-cd hm
+cd ~/crm-tesoreria && ./instalar.sh
 ```
 
-2. Crear la configuración local a partir del ejemplo (en Windows: `copy backend\.env.example backend\.env`):
+El instalador:
+
+1. Verifica que Docker esté en marcha.
+2. Pide el usuario y la contraseña del administrador (mínimo 10 caracteres; sin
+   `$`, comillas, espacios, `#` ni `\`).
+3. Crea `backend/.env` con claves aleatorias para Django y PostgreSQL (si ya
+   existe, no lo toca).
+4. Levanta base de datos, backend y pantallas con `docker compose`.
+5. Espera a que respondan y carga las tasas BCP de referencia.
+6. Muestra las direcciones para entrar, incluida la de la red local para otras
+   computadoras de la oficina.
+
+Se puede volver a ejecutar sin perder datos. El CRM se inicia solo cada vez que
+se abre Docker Desktop (`restart: unless-stopped`).
+
+Actualizar a una versión nueva:
 
 ```bash
-cp backend/.env.example backend/.env
+cd ~/crm-tesoreria && git pull && docker compose up -d --build
 ```
 
-3. Abrir `backend/.env` con un editor de texto y cambiar al menos
-   `DJANGO_SUPERUSER_PASSWORD` (contraseña del administrador inicial) y
-   `DJANGO_SECRET_KEY`.
+### Opción A2 — Docker sin el instalador (Windows o manual)
 
-4. Levantar todo (la primera vez tarda unos minutos en descargar e instalar):
+1. Descargar el proyecto y entrar a la carpeta:
+
+```bash
+git clone https://github.com/ddelvallecabral-cloud/hm.git crm-tesoreria
+```
+
+2. Copiar `backend/.env.example` a `backend/.env` (en Windows:
+   `copy backend\.env.example backend\.env`) y cambiar al menos
+   `DJANGO_SUPERUSER_PASSWORD`, `DJANGO_SECRET_KEY` y `POSTGRES_PASSWORD`.
+
+3. Levantar todo:
 
 ```bash
 docker compose up -d --build
 ```
 
-Al arrancar se aplican las migraciones y se crea el usuario administrador
-definido en `.env`.
+Con cualquiera de las dos opciones, al arrancar se aplican las migraciones y se
+crea el usuario administrador definido en `backend/.env`.
 
-- **Registrar cobranza:** <http://localhost:5173> (ingresar con el usuario administrador)
+- **CRM:** <http://localhost:5173> (ingresar con el usuario administrador)
 - **Administración** (usuarios, roles, clientes, parámetros): <http://localhost:8000/admin/>
 - **API:** <http://localhost:8000/api/health/> → `{"status": "ok", "database": "ok"}`
 
-5. Opcional: cargar datos de demostración (3 clientes y 6 facturas marcados
-   "(DEMO)", usuarios `demo_tesorero` y `demo_cobrador` con la contraseña que elijas):
+Sólo para probar (no en la instalación real de la empresa): datos de
+demostración con 3 clientes y 6 facturas marcados "(DEMO)" y los usuarios
+`demo_tesorero` y `demo_cobrador`:
 
 ```bash
 docker compose exec backend python manage.py cargar_demo --clave elegir-una-clave
