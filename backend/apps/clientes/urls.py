@@ -1,4 +1,8 @@
-from django.urls import path  # noqa: F401
+from django.urls import path
+
+from .views import ClienteListCreateView
 
 app_name = "clientes"
-urlpatterns: list = []  # endpoints pendientes
+urlpatterns = [
+    path("", ClienteListCreateView.as_view(), name="lista"),
+]
