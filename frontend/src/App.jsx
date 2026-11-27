@@ -1,19 +1,38 @@
 import { useEffect, useState } from "react";
 import { api } from "./api/client.js";
-
-// Esqueleto: las pantallas de cada módulo se agregan en src/modules/<modulo>.
-const MODULOS = ["Clientes", "Facturación", "Cobranzas", "Intereses", "Tesorería", "Reportes"];
+import RegistrarCobranza from "./modules/cobranzas/RegistrarCobranza.jsx";
+import Login from "./pages/Login.jsx";
+import "./styles.css";
 
 export default function App() {
-  const [estado, setEstado] = useState("verificando…");
+  const [usuario, setUsuario] = useState(undefined); // undefined = verificando
+
   useEffect(() => {
-    api("/health/").then((r) => setEstado(r.status)).catch(() => setEstado("sin conexión"));
+    api("/core/me/").then(setUsuario).catch(() => setUsuario(null));
   }, []);
+
+  async function salir() {
+    await api("/core/logout/", { method: "POST" }).catch(() => {});
+    setUsuario(null);
+  }
+
+  if (usuario === undefined) return <p className="cargando">Cargando…</p>;
+  if (!usuario) return <Login onIngreso={setUsuario} />;
+
   return (
-    <main style={{ fontFamily: "system-ui", padding: 16, maxWidth: 720, margin: "0 auto" }}>
-      <h1>CRM Tesorería</h1>
-      <p>Estado de la API: <strong>{estado}</strong></p>
-      <ul>{MODULOS.map((m) => <li key={m}>{m} — pendiente</li>)}</ul>
-    </main>
+    <div className="app">
+      <header className="barra">
+        <div className="marca">CRM Tesorería</div>
+        <nav aria-label="Módulos"><span className="nav-activo">Registrar cobranza</span></nav>
+        <div className="usuario">
+          <span>{usuario.first_name || usuario.username} · {usuario.rol}</span>
+          <a href="/admin/">Administración</a>
+          <button type="button" className="link" onClick={salir}>Salir</button>
+        </div>
+      </header>
+      <main className="contenido">
+        <RegistrarCobranza usuario={usuario} />
+      </main>
+    </div>
   );
 }

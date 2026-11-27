@@ -1,25 +1,28 @@
-"""Cálculo de IVA (Ley N° 6380/2019).
+"""Cálculo del IVA 10% (Ley N° 6380/2019, tasa general aplicable a hierros
+y productos siderúrgicos).
 
-Tasas vigentes: 10% (general; aplica a hierros y productos siderúrgicos),
-5% (bienes puntuales) y exento. Se admiten las tres para no forzar errores si
-algún ítem tiene otro tratamiento, pero el valor por defecto es 10%.
+Regla de exactitud: el IVA es SIEMPRE exactamente el 10% de la base
+imponible, redondeado a la unidad mínima de la moneda:
 
-Regla "el IVA nunca se aplica sobre montos ya gravados":
-En Paraguay los precios se expresan con IVA incluido. Cada ítem declara
-explícitamente `precio_incluye_iva`:
-  - True  -> el IVA se EXTRAE del precio:  IVA = total × 10/110  (= total / 11)
-  - False -> el IVA se ADICIONA a la base:  IVA = base × 10%
-Así el sistema nunca multiplica por 1,10 un precio que ya contiene el impuesto.
-`validar_desglose()` vuelve a comprobar el resultado (base + IVA = total y
-IVA = base × tasa) antes de guardar la factura.
+    iva = redondear(base × 10 / 100)      (PYG: 0 decimales, USD: 2; HALF_UP)
 
-Redondeo: PYG a 0 decimales, USD a 2, HALF_UP, una única vez por ítem.
-La base se obtiene por diferencia (total − IVA) para que siempre cuadre.
+Cómo se obtiene la base según cómo se expresó el precio:
+  * Precio con IVA incluido (lo habitual en Paraguay):
+        base = redondear(total × 100 / 110);   iva = redondear(base × 10%)
+    El IVA se EXTRAE del precio; nunca se vuelve a sumar sobre un monto que ya
+    lo contiene. Es la misma secuencia que usa el Manual Técnico SIFEN
+    (base gravada a partir del total del ítem, y liquidación del IVA sobre esa
+    base); confirmar con el proveedor del facturador electrónico.
+    Por el redondeo a guaraníes enteros, base + iva puede diferir del total en
+    1 unidad mínima (p. ej. total Gs. 5 → base 5, IVA 0). El total es siempre el
+    precio cobrado; esa diferencia se informa en `diferencia_redondeo`.
+  * Precio neto (sin IVA):
+        base = precio;  iva = redondear(base × 10%);  total = base + iva   (siempre cuadra)
 """
 from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal
 
-TASAS_IVA_VALIDAS = (Decimal("0"), Decimal("5"), Decimal("10"))
+TASA_IVA = Decimal("10")
 DECIMALES = {"PYG": 0, "USD": 2}
 
 
@@ -27,8 +30,16 @@ class ErrorIVA(ValueError):
     pass
 
 
+def unidad_minima(moneda: str) -> Decimal:
+    return Decimal(1).scaleb(-DECIMALES[moneda])
+
+
 def redondear(monto, moneda: str) -> Decimal:
-    return Decimal(monto).quantize(Decimal(1).scaleb(-DECIMALES[moneda]), rounding=ROUND_HALF_UP)
+    return Decimal(str(monto)).quantize(unidad_minima(moneda), rounding=ROUND_HALF_UP)
+
+
+def iva_de_base(base, moneda: str) -> Decimal:
+    return redondear(Decimal(str(base)) * TASA_IVA / 100, moneda)
 
 
 @dataclass(frozen=True)
@@ -37,40 +48,33 @@ class DesgloseIVA:
     iva: Decimal
     total: Decimal
 
+    @property
+    def diferencia_redondeo(self) -> Decimal:
+        return self.total - self.base_imponible - self.iva
 
-def calcular_iva(monto, tasa, moneda: str, precio_incluye_iva: bool) -> DesgloseIVA:
-    monto, tasa = Decimal(str(monto)), Decimal(str(tasa))
-    if tasa not in TASAS_IVA_VALIDAS:
-        raise ErrorIVA(f"Tasa de IVA {tasa}% no válida (0, 5 o 10).")
+
+def calcular_iva(monto, moneda: str, precio_incluye_iva: bool = True) -> DesgloseIVA:
+    monto = Decimal(str(monto))
     if monto < 0:
         raise ErrorIVA("El monto no puede ser negativo; las devoluciones van en nota de crédito.")
-    if tasa == 0:
-        m = redondear(monto, moneda)
-        return DesgloseIVA(m, Decimal(0), m)
     if precio_incluye_iva:
         total = redondear(monto, moneda)
-        iva = redondear(total * tasa / (100 + tasa), moneda)
-        return DesgloseIVA(total - iva, iva, total)
-    base = redondear(monto, moneda)
-    iva = redondear(base * tasa / 100, moneda)
-    return DesgloseIVA(base, iva, base + iva)
+        base = redondear(total * 100 / (100 + TASA_IVA), moneda)
+    else:
+        base = redondear(monto, moneda)
+        total = None
+    iva = iva_de_base(base, moneda)
+    return DesgloseIVA(base, iva, total if total is not None else base + iva)
 
 
-def validar_desglose(base, iva, tasa, moneda: str, lineas: int = 1) -> None:
-    """Comprueba que el IVA corresponda a la base (tolerancia: 1 unidad mínima por línea redondeada).
-
-    Detecta el error típico de aplicar IVA a un precio que ya lo incluía
-    (en ese caso el IVA queda ~10% más alto que base × tasa).
-    """
-    base, iva, tasa = Decimal(base), Decimal(iva), Decimal(tasa)
-    if tasa == 0:
-        if iva:
-            raise ErrorIVA("Un monto exento no puede tener IVA.")
-        return
-    esperado = base * tasa / 100
-    tolerancia = Decimal(1).scaleb(-DECIMALES[moneda]) * max(lineas, 1)
-    if abs(iva - esperado) > tolerancia:
+def validar_iva(base, iva, total, moneda: str) -> None:
+    """IVA exactamente 10% de la base y total coherente (±1 unidad mínima de redondeo)."""
+    base, iva, total = Decimal(base), Decimal(iva), Decimal(total)
+    esperado = iva_de_base(base, moneda)
+    if iva != esperado:
         raise ErrorIVA(
-            f"IVA {tasa}% inconsistente: base {base} → se esperaba {redondear(esperado, moneda)}, hay {iva}. "
-            "¿Se aplicó IVA sobre un precio que ya lo incluía?"
+            f"El IVA debe ser exactamente el 10% de la base: base {base} → IVA {esperado}, informado {iva}. "
+            "Si el precio ya incluía IVA, no se le debe volver a aplicar."
         )
+    if abs(total - base - iva) > unidad_minima(moneda):
+        raise ErrorIVA(f"El total {total} no corresponde a base {base} + IVA {iva}.")

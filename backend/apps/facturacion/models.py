@@ -5,12 +5,13 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator, RegexValidator
 from django.db import models
-from django.db.models import Sum
+from django.db.models import Func, Q, Sum, Value
+from django.utils import timezone
 
 from apps.clientes.models import Cliente
 from apps.core.models import AuditableModel
 
-from .services.iva import ErrorIVA, calcular_iva, redondear, validar_desglose
+from .services.iva import ErrorIVA, calcular_iva, redondear, validar_iva
 from .services.sifen import validar_cdc
 
 CERO = Decimal("0")
@@ -84,10 +85,15 @@ class Factura(AuditableModel):
         CREDITO = "credito", "Crédito"
 
     class Estado(models.TextChoices):
-        PENDIENTE = "pendiente", "Pendiente de cobro"
-        PARCIAL = "parcial", "Cobro parcial"
+        PENDIENTE = "pendiente", "Pendiente"
+        PAGADA_PARCIAL = "pagada_parcial", "Pagada parcialmente"
         PAGADA = "pagada", "Pagada"
+        VENCIDA = "vencida", "Vencida"
+        VENCIDA_PAGO_PARCIAL = "vencida_pago_parcial", "Vencida y en proceso de pago parcial"
         ANULADA = "anulada", "Anulada"
+
+    ESTADOS_ABIERTOS = (Estado.PENDIENTE, Estado.PAGADA_PARCIAL, Estado.VENCIDA, Estado.VENCIDA_PAGO_PARCIAL)
+    ESTADOS_VENCIDOS = (Estado.VENCIDA, Estado.VENCIDA_PAGO_PARCIAL)
 
     class EstadoSifen(models.TextChoices):
         BORRADOR = "borrador", "Borrador (no enviado)"
@@ -100,8 +106,10 @@ class Factura(AuditableModel):
     ESTADOS_SIFEN_APROBADOS = (EstadoSifen.APROBADO, EstadoSifen.APROBADO_OBS)
 
     cliente = models.ForeignKey(Cliente, on_delete=models.PROTECT, related_name="facturas")
-    orden_compra = models.ForeignKey(OrdenCompra, null=True, blank=True, on_delete=models.PROTECT,
-                                     related_name="facturas")
+    orden_compra = models.ForeignKey(
+        OrdenCompra, null=True, blank=True, on_delete=models.PROTECT, related_name="facturas",
+        help_text="Opcional para profesionales y pymes; no admitida para particulares.",
+    )
 
     # --- Numeración (001-001-0000001) y timbrado ---
     timbrado = models.CharField(max_length=8, validators=[RegexValidator(r"^\d{8}$", "El timbrado tiene 8 dígitos.")])
@@ -129,24 +137,23 @@ class Factura(AuditableModel):
     tasa_interes_anual = models.DecimalField(
         max_digits=6, decimal_places=3, default=CERO,
         validators=[MinValueValidator(0), MaxValueValidator(100)],
-        help_text="Tasa compensatoria pactada (% anual). Se usará en la etapa de intereses por mora.",
+        help_text="Tasa compensatoria pactada (% anual). Se usará en la fase de intereses por mora.",
     )
 
-    # --- Totales: se calculan desde los ítems, nunca se cargan a mano ---
-    gravada_10 = _monto()
-    iva_10 = _monto()
-    gravada_5 = _monto()
-    iva_5 = _monto()
-    exenta = _monto()
+    # --- Importes (calculados desde los ítems; nunca se cargan a mano) ---
+    precios_incluyen_iva = models.BooleanField(
+        default=True, help_text="True: los precios de los ítems ya contienen el IVA (se extrae). False: se suma.")
+    base_imponible = _monto()
+    iva = _monto(help_text="Exactamente el 10% de la base imponible, redondeado a la unidad de la moneda.")
     total = _monto()
     porcentaje_retencion_iva = models.DecimalField(
         max_digits=5, decimal_places=2, default=CERO, validators=[MinValueValidator(0), MaxValueValidator(100)],
         help_text="Si el cliente es agente de retención: % del IVA que retiene (verificar resolución SET vigente).",
     )
     retencion_iva = _monto()
-    saldo = _monto(help_text="Saldo pendiente de cobro (se actualizará con el módulo de cobranzas).")
+    saldo = _monto(help_text="Saldo pendiente de cobro.")
 
-    estado = models.CharField(max_length=10, choices=Estado.choices, default=Estado.PENDIENTE, db_index=True)
+    estado = models.CharField(max_length=22, choices=Estado.choices, default=Estado.PENDIENTE, db_index=True)
     motivo_anulacion = models.CharField(max_length=255, blank=True)
     observaciones = models.TextField(blank=True)
     creado_por = models.ForeignKey("core.Usuario", null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
@@ -154,8 +161,9 @@ class Factura(AuditableModel):
     actualizado_en = models.DateTimeField(auto_now=True)
 
     CAMPOS_AUDITADOS = (
-        "estado", "fecha_vencimiento", "plazo_dias", "condicion", "total", "saldo", "orden_compra_id",
-        "estado_sifen", "cdc", "tasa_interes_anual", "porcentaje_retencion_iva", "motivo_anulacion",
+        "estado", "fecha_vencimiento", "plazo_dias", "condicion", "base_imponible", "iva", "total", "saldo",
+        "orden_compra_id", "estado_sifen", "cdc", "tasa_interes_anual", "porcentaje_retencion_iva",
+        "motivo_anulacion",
     )
 
     class Meta:
@@ -164,13 +172,18 @@ class Factura(AuditableModel):
         constraints = [
             models.UniqueConstraint(fields=["timbrado", "establecimiento", "punto_expedicion", "numero"],
                                     name="factura_numero_unico"),
-            models.UniqueConstraint(fields=["cdc"], condition=~models.Q(cdc=""), name="factura_cdc_unico"),
+            models.UniqueConstraint(fields=["cdc"], condition=~Q(cdc=""), name="factura_cdc_unico"),
+            # Garantía en la base de datos: IVA = 10% exacto de la base (redondeado por moneda).
             models.CheckConstraint(
-                condition=models.Q(total=models.F("gravada_10") + models.F("iva_10") + models.F("gravada_5")
-                                   + models.F("iva_5") + models.F("exenta")),
-                name="factura_total_cuadra",
+                condition=Q(moneda="PYG", iva=Func(models.F("base_imponible") * Value(Decimal("0.10")),
+                                                    Value(0), function="ROUND"))
+                | Q(moneda="USD", iva=Func(models.F("base_imponible") * Value(Decimal("0.10")),
+                                           Value(2), function="ROUND")),
+                name="factura_iva_10_exacto",
             ),
-            models.CheckConstraint(condition=~models.Q(moneda="USD") | models.Q(tipo_cambio__isnull=False),
+            models.CheckConstraint(condition=Q(saldo__gte=0) & Q(saldo__lte=models.F("total")),
+                                   name="factura_saldo_valido"),
+            models.CheckConstraint(condition=~Q(moneda="USD") | Q(tipo_cambio__isnull=False),
                                    name="factura_usd_con_tipo_cambio"),
         ]
         indexes = [models.Index(fields=["estado", "fecha_vencimiento"]), models.Index(fields=["cliente", "estado"])]
@@ -183,12 +196,28 @@ class Factura(AuditableModel):
         return f"{self.establecimiento}-{self.punto_expedicion}-{self.numero}"
 
     @property
-    def iva_total(self) -> Decimal:
-        return self.iva_10 + self.iva_5
-
-    @property
     def aprobada_sifen(self) -> bool:
         return self.estado_sifen in self.ESTADOS_SIFEN_APROBADOS
+
+    @property
+    def monto_cobrado(self) -> Decimal:
+        return self.total - self.saldo
+
+    def calcular_saldo_pendiente(self, al=None) -> Decimal:
+        """Saldo pendiente = total − pagos no anulados de la factura.
+
+        `al`: fecha de corte opcional (saldo a esa fecha). El campo `saldo` es
+        este mismo valor guardado y se actualiza con cada pago o anulación.
+        """
+        if self.estado == self.Estado.ANULADA:
+            return CERO
+        if not self.pk:
+            return self.total
+        pagos = self.pagos.filter(anulado=False)
+        if al:
+            pagos = pagos.filter(fecha__lte=al)
+        cobrado = pagos.aggregate(s=Sum("monto"))["s"] or CERO
+        return max(self.total - cobrado, CERO)
 
     # ------------------------------------------------------------------ #
     def calcular_vencimiento(self):
@@ -199,24 +228,37 @@ class Factura(AuditableModel):
             self.fecha_vencimiento = self.fecha_emision + timedelta(days=self.plazo_dias)
 
     def recalcular_totales(self):
-        """Suma los ítems por tasa de IVA y valida el desglose resultante."""
-        acum = {10: [CERO, CERO, 0], 5: [CERO, CERO, 0], 0: [CERO, CERO, 0]}
-        for it in self.items.all():
-            a = acum[int(it.tasa_iva)]
-            a[0] += it.base_imponible
-            a[1] += it.iva
-            a[2] += 1
-        self.gravada_10, self.iva_10 = acum[10][0], acum[10][1]
-        self.gravada_5, self.iva_5 = acum[5][0], acum[5][1]
-        self.exenta = acum[0][0]
+        """Suma los importes de los ítems y desglosa base / IVA 10% / total."""
+        suma = sum((it.importe for it in self.items.all()), CERO)
         try:
-            validar_desglose(self.gravada_10, self.iva_10, 10, self.moneda, acum[10][2])
-            validar_desglose(self.gravada_5, self.iva_5, 5, self.moneda, acum[5][2])
+            d = calcular_iva(suma, self.moneda, self.precios_incluyen_iva)
         except ErrorIVA as e:
             raise ValidationError({"items": str(e)})
-        self.total = self.gravada_10 + self.iva_10 + self.gravada_5 + self.iva_5 + self.exenta
-        self.retencion_iva = redondear(self.iva_total * self.porcentaje_retencion_iva / 100, self.moneda)
+        self.base_imponible, self.iva, self.total = d.base_imponible, d.iva, d.total
+        self.retencion_iva = redondear(self.iva * self.porcentaje_retencion_iva / 100, self.moneda)
         self.saldo = self.total
+
+    def actualizar_estado(self, hoy=None):
+        """Estado según saldo y vencimiento:
+
+        |                     | sin pagos  | con pagos parciales     | saldo 0 |
+        |---------------------|------------|-------------------------|---------|
+        | antes de vencer     | pendiente  | pagada_parcial          | pagada  |
+        | después de vencer   | vencida    | vencida_pago_parcial    | pagada  |
+        """
+        if self.estado == self.Estado.ANULADA:
+            return self.estado
+        hoy = hoy or getattr(self, "_fecha_estado", None) or timezone.localdate()
+        self._fecha_estado = hoy  # save() reutiliza la misma fecha de referencia
+        if self.saldo <= 0:
+            self.estado = self.Estado.PAGADA
+        elif self.fecha_vencimiento < hoy:
+            self.estado = self.Estado.VENCIDA_PAGO_PARCIAL if self.saldo < self.total else self.Estado.VENCIDA
+        elif self.saldo < self.total:
+            self.estado = self.Estado.PAGADA_PARCIAL
+        else:
+            self.estado = self.Estado.PENDIENTE
+        return self.estado
 
     def total_en_guaranies(self, monto=None) -> Decimal:
         monto = self.total if monto is None else monto
@@ -224,7 +266,6 @@ class Factura(AuditableModel):
 
     # ------------------------------------------------------------------ #
     def clean(self):
-        """Reglas de emisión. Se aplican al crear y al cambiar cliente/condición/plazo/OC."""
         errores = {}
         c = self.cliente if self.cliente_id else None
         if c is None:
@@ -232,12 +273,10 @@ class Factura(AuditableModel):
         revisar = self._state.adding or self._cambio_en("cliente_id", "condicion", "plazo_dias", "orden_compra_id")
 
         if revisar:
-            # Orden de Compra según tipo de cliente
+            # Orden de compra: nunca para particulares; opcional (o exigida por config) para el resto.
             if not c.requiere_orden_compra and self.orden_compra_id:
                 errores["orden_compra"] = "Los clientes particulares no manejan Orden de Compra."
             elif c.requiere_orden_compra and not self.orden_compra_id and settings.CRM["EXIGIR_OC"]:
-                # Por defecto la OC es OPCIONAL para profesionales y pymes (no bloquea la venta).
-                # Con CRM_EXIGIR_OC=true vuelve a ser obligatoria.
                 errores["orden_compra"] = f"El N° de OC es obligatorio para clientes {c.get_tipo_display().lower()}."
             elif self.orden_compra_id:
                 oc = self.orden_compra
@@ -248,7 +287,6 @@ class Factura(AuditableModel):
                 elif oc.moneda != self.moneda:
                     errores["orden_compra"] = "La moneda de la factura no coincide con la de la OC."
 
-            # Condición de venta y plazo
             if self.condicion == self.Condicion.CREDITO:
                 if c.condicion_pago != Cliente.CondicionPago.CREDITO:
                     errores["condicion"] = "El cliente no tiene crédito habilitado; facture al contado."
@@ -257,6 +295,11 @@ class Factura(AuditableModel):
             elif self.plazo_dias:
                 errores["plazo_dias"] = "Una venta al contado no lleva plazo."
 
+        if self.total:
+            try:
+                validar_iva(self.base_imponible, self.iva, self.total, self.moneda)
+            except ErrorIVA as e:
+                errores["iva"] = str(e)
         if self.moneda == Moneda.USD and not self.tipo_cambio:
             errores["tipo_cambio"] = "Indique el tipo de cambio para facturas en USD."
         if self.porcentaje_retencion_iva and c.tipo == Cliente.Tipo.PARTICULAR:
@@ -274,8 +317,7 @@ class Factura(AuditableModel):
         """Límite de crédito (en Gs.) y saldo disponible de la OC. Llamar con los totales ya calculados."""
         if self.condicion == self.Condicion.CREDITO:
             abiertas = (Factura.objects.filter(cliente_id=self.cliente_id, condicion=self.Condicion.CREDITO,
-                                               estado__in=[self.Estado.PENDIENTE, self.Estado.PARCIAL])
-                        .exclude(pk=self.pk))
+                                               estado__in=self.ESTADOS_ABIERTOS).exclude(pk=self.pk))
             usado = sum((f.total_en_guaranies(f.saldo) for f in abiertas), CERO)
             exposicion = usado + self.total_en_guaranies()
             if exposicion > self.cliente.limite_credito:
@@ -303,11 +345,14 @@ class Factura(AuditableModel):
                 raise ValidationError("Documento aprobado por SIFEN: no se puede modificar; emita nota de crédito/débito.")
         if self._state.adding or self._cambio_en("plazo_dias", "condicion", "fecha_emision"):
             self.calcular_vencimiento()
+        self.actualizar_estado()
         self.full_clean()
         super().save(*args, **kwargs)
 
 
 class ItemFactura(models.Model):
+    """Detalle de la venta. El IVA se liquida sobre el total de la factura (tasa única 10%)."""
+
     factura = models.ForeignKey(Factura, on_delete=models.CASCADE, related_name="items")
     codigo = models.CharField(max_length=40, blank=True)
     descripcion = models.CharField(max_length=250, help_text="Ej.: Varilla conformada Ø12 mm x 12 m")
@@ -315,28 +360,19 @@ class ItemFactura(models.Model):
     cantidad = models.DecimalField(max_digits=14, decimal_places=3, validators=[MinValueValidator(Decimal("0.001"))])
     precio_unitario = models.DecimalField(max_digits=18, decimal_places=4, validators=[MinValueValidator(0)])
     descuento = models.DecimalField(max_digits=18, decimal_places=2, default=CERO, validators=[MinValueValidator(0)])
-    tasa_iva = models.PositiveSmallIntegerField(choices=[(10, "10%"), (5, "5%"), (0, "Exento")], default=10)
-    precio_incluye_iva = models.BooleanField(
-        default=True, help_text="En Paraguay el precio se expresa IVA incluido: el IVA se extrae, no se suma.")
-    base_imponible = models.DecimalField(max_digits=18, decimal_places=2, default=CERO, editable=False)
-    iva = models.DecimalField(max_digits=18, decimal_places=2, default=CERO, editable=False)
-    total = models.DecimalField(max_digits=18, decimal_places=2, default=CERO, editable=False)
+    importe = models.DecimalField(max_digits=18, decimal_places=2, default=CERO, editable=False,
+                                  help_text="cantidad × precio − descuento, redondeado a la moneda.")
 
     class Meta:
         db_table = "facturas_items"
 
-    def calcular(self):
-        bruto = self.cantidad * self.precio_unitario - self.descuento
-        if bruto < 0:
-            raise ValidationError({"descuento": "El descuento supera el importe del ítem."})
-        try:
-            d = calcular_iva(bruto, self.tasa_iva, self.factura.moneda, self.precio_incluye_iva)
-        except ErrorIVA as e:
-            raise ValidationError({"tasa_iva": str(e)})
-        self.base_imponible, self.iva, self.total = d.base_imponible, d.iva, d.total
-
     def save(self, *args, **kwargs):
         if self.factura.aprobada_sifen:
             raise ValidationError("Documento aprobado por SIFEN: los ítems no se pueden modificar.")
-        self.calcular()
+        self.cantidad, self.precio_unitario, self.descuento = (
+            Decimal(str(v)) for v in (self.cantidad, self.precio_unitario, self.descuento))
+        bruto = self.cantidad * self.precio_unitario - self.descuento
+        if bruto < 0:
+            raise ValidationError({"descuento": "El descuento supera el importe del ítem."})
+        self.importe = redondear(bruto, self.factura.moneda)
         super().save(*args, **kwargs)

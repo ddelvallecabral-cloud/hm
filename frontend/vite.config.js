@@ -6,6 +6,10 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 5173,
-    proxy: { "/api": process.env.VITE_PROXY_TARGET || "http://localhost:8000" },
+    host: true,
+    // /api, /admin y /static se sirven desde Django: misma URL para la sesión y el CSRF.
+    proxy: Object.fromEntries(
+      ["/api", "/api-auth", "/admin", "/static"].map((p) => [p, process.env.VITE_PROXY_TARGET || "http://localhost:8000"]),
+    ),
   },
 });

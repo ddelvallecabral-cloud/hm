@@ -5,7 +5,7 @@ from .models import Factura, ItemFactura, OrdenCompra
 
 class ItemInline(admin.TabularInline):
     model = ItemFactura
-    readonly_fields = ("base_imponible", "iva", "total")
+    readonly_fields = ("importe",)
     extra = 0
 
 
@@ -13,10 +13,10 @@ class ItemInline(admin.TabularInline):
 class FacturaAdmin(admin.ModelAdmin):
     inlines = [ItemInline]
     list_display = ("numero_completo", "cliente", "fecha_emision", "fecha_vencimiento", "moneda",
-                    "total", "iva_10", "saldo", "estado", "estado_sifen")
+                    "base_imponible", "iva", "total", "saldo", "estado", "estado_sifen")
     list_filter = ("estado", "estado_sifen", "moneda", "condicion")
     search_fields = ("numero", "cdc", "cliente__razon_social", "cliente__ruc")
-    readonly_fields = ("gravada_10", "iva_10", "gravada_5", "iva_5", "exenta", "total", "retencion_iva", "saldo")
+    readonly_fields = ("base_imponible", "iva", "total", "retencion_iva", "saldo")
 
 
 @admin.register(OrdenCompra)

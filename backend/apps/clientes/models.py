@@ -57,6 +57,8 @@ class Cliente(AuditableModel):
     email_cobranza = models.EmailField(blank=True)
     direccion = models.CharField(max_length=250, blank=True)
     ciudad = models.CharField(max_length=80, blank=True)
+    acepta_whatsapp = models.BooleanField(
+        default=False, help_text="Consentimiento del cliente para recibir gestiones de cobro por WhatsApp/SMS.")
 
     activo = models.BooleanField(default=True)
     creado_en = models.DateTimeField(auto_now_add=True)
