@@ -26,7 +26,7 @@ class OrdenCompraListCreateView(generics.ListCreateAPIView):
 
 
 class FacturaListCreateView(generics.ListCreateAPIView):
-    """?cliente= &estado= &moneda= &condicion= &estado_sifen="""
+    """?q=<número, cliente o RUC> &cliente= &estado= &moneda= &condicion= &estado_sifen="""
 
     serializer_class = FacturaSerializer
     permission_classes = [LecturaTodosEscrituraTesorero]
@@ -36,7 +36,36 @@ class FacturaListCreateView(generics.ListCreateAPIView):
         for campo in ("cliente", "estado", "moneda", "condicion", "estado_sifen"):
             if self.request.query_params.get(campo):
                 qs = qs.filter(**{campo: self.request.query_params[campo]})
+        if self.request.query_params.get("q"):
+            qs = qs.filter(filtro_busqueda(self.request.query_params["q"]))
         return qs
+
+
+def filtro_busqueda(q: str):
+    """Busca por número (001-001-0000123, 0000123 o 123), razón social o RUC."""
+    from django.db.models import Q
+
+    q = q.strip()
+    filtro = Q(cliente__razon_social__icontains=q) | Q(cliente__ruc__startswith=q)
+    partes = q.replace(" ", "").split("-")
+    if all(p.isdigit() for p in partes):
+        if len(partes) == 3:
+            filtro |= Q(establecimiento=partes[0].zfill(3), punto_expedicion=partes[1].zfill(3),
+                        numero=partes[2].zfill(7))
+        elif len(partes) == 1 and len(partes[0]) <= 7:
+            filtro |= Q(numero=partes[0].zfill(7))
+    return filtro
+
+
+@api_view(["GET"])
+def historial(request, pk):
+    """Línea de tiempo de la factura: pagos, gestiones de cobro y (tesorería) quién cambió estado o vencimiento."""
+    from apps.core.views import montos_a_texto
+
+    from .historial import historial_factura
+
+    factura = get_object_or_404(Factura, pk=pk)
+    return Response(montos_a_texto(historial_factura(factura, ver_auditoria=request.user.es_tesorero)))
 
 
 class FacturaDetailView(generics.RetrieveUpdateAPIView):

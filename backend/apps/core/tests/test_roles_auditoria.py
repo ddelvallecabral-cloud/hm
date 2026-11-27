@@ -66,7 +66,7 @@ class AuditoriaTest(TestCase):
         u = Usuario.objects.create_user("script", password="x" * 12)
         with contexto_auditoria(u):
             Cliente.objects.create(razon_social="Juan", tipo="particular")
-        self.assertEqual(AuditLog.objects.get().usuario_nombre, "script")
+        self.assertEqual(AuditLog.objects.get(modelo="clientes.Cliente").usuario_nombre, "script")
 
     def test_bitacora_inmutable(self):
         Cliente.objects.create(razon_social="Juan", tipo="particular")

@@ -59,24 +59,15 @@ def registrar_cobranza(factura: Factura, monto, medio: str, fecha=None, usuario=
 
 def buscar_facturas_por_cobrar(q: str = "", cliente_id=None, moneda=None, limite: int = 50):
     """Facturas con saldo, buscando por número (001-001-0000123, 0000123 o 123), cliente o RUC."""
-    from django.db.models import Q
-
     qs = Factura.objects.filter(estado__in=Factura.ESTADOS_ABIERTOS).select_related("cliente")
     if cliente_id:
         qs = qs.filter(cliente_id=cliente_id)
     if moneda:
         qs = qs.filter(moneda=moneda)
-    q = (q or "").strip()
-    if q:
-        filtro = Q(cliente__razon_social__icontains=q) | Q(cliente__ruc__startswith=q)
-        partes = q.replace(" ", "").split("-")
-        if all(p.isdigit() for p in partes):
-            if len(partes) == 3:
-                filtro |= Q(establecimiento=partes[0].zfill(3), punto_expedicion=partes[1].zfill(3),
-                            numero=partes[2].zfill(7))
-            elif len(partes) == 1 and len(partes[0]) <= 7:
-                filtro |= Q(numero=partes[0].zfill(7))
-        qs = qs.filter(filtro)
+    if (q or "").strip():
+        from apps.facturacion.views import filtro_busqueda
+
+        qs = qs.filter(filtro_busqueda(q))
     return qs.order_by("fecha_vencimiento", "id")[:limite]
 
 
