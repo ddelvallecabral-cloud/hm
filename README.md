@@ -5,9 +5,10 @@ crédito, facturas en **PYG** y **USD** con **IVA 10%**, clientes
 **particulares / profesionales / pymes**, datos compatibles con **SIFEN** e
 **intereses por mora** según los topes del **BCP**.
 
-> **Estado: etapa 2 completa** — roles, auditoría, clientes y facturación.
-> Cobranzas, intereses por mora, tesorería y reportes se implementan en las
-> etapas siguientes; ver [`docs/arquitectura.md`](docs/arquitectura.md).
+> **Estado: fase 3** — clientes, roles, auditoría, facturación (IVA 10% exacto,
+> estados con vencida) y cobranzas (contado, pagos parciales, gestiones de
+> cobro). Intereses por mora, tesorería y reportes vienen en las fases
+> siguientes; ver [`docs/arquitectura.md`](docs/arquitectura.md).
 
 ## Stack
 
@@ -175,7 +176,7 @@ desarrollo de Vite redirige `/api`).
 > que entrega la SET. Esas credenciales van sólo en variables de entorno o en
 > un gestor de secretos; los archivos `.p12/.pfx/.pem` están excluidos de git.
 
-## API disponible (etapa 2)
+## API disponible
 
 Todas las rutas requieren sesión iniciada (en dev también acepta autenticación
 básica). Los montos se envían y devuelven como texto decimal.
@@ -191,6 +192,15 @@ básica). Los montos se envían y devuelven como texto decimal.
 | GET, POST | `/api/facturacion/facturas/` | lectura todos / alta tesorero | Alta con `items`; totales e IVA calculados |
 | GET, PATCH | `/api/facturacion/facturas/<id>/` | lectura todos / edición tesorero | Datos SIFEN, prórroga de vencimiento (con `motivo`), observaciones |
 | POST | `/api/facturacion/facturas/<id>/anular/` | tesorero | Requiere `motivo` |
+| POST | `/api/cobranzas/cobro-contado/` | tesorero | `{factura, medio, referencia}` → cobra el saldo y deja la factura pagada |
+| GET, POST | `/api/cobranzas/pagos/` | lectura todos / alta tesorero | Pago total o parcial: `imputaciones` manuales, `aplicar_automatico` o sin imputar (saldo a favor) |
+| GET | `/api/cobranzas/pagos/<id>/` | todos | Detalle con aplicaciones y monto sin aplicar |
+| POST | `/api/cobranzas/pagos/<id>/aplicar/` | tesorero | Aplica saldo a favor a facturas |
+| POST | `/api/cobranzas/pagos/<id>/anular/` | tesorero | Requiere `motivo`; restituye saldos |
+| GET, POST | `/api/cobranzas/gestiones/` | todos | Llamadas, correos, WhatsApp, visitas, promesas de pago (`?cliente=&factura=&promesas_pendientes=1`) |
+| GET, PATCH | `/api/cobranzas/gestiones/<id>/` | todos (el cobrador sólo las suyas) | Completar resultado, promesa o próxima acción |
+| GET | `/api/cobranzas/alertas/` | todos | Próximas a vencer (`?dias=`) y vencidas con días de atraso |
+| GET | `/api/cobranzas/cuenta-corriente/<cliente_id>/` | todos | Facturas abiertas, saldo vencido, últimos pagos y saldo a favor por moneda |
 
 Ejemplo de alta de factura a crédito para una pyme:
 
@@ -199,22 +209,36 @@ Ejemplo de alta de factura a crédito para una pyme:
   "cliente": 2, "orden_compra": 5,
   "timbrado": "12345678", "establecimiento": "001", "punto_expedicion": "001", "numero": "0000123",
   "fecha_emision": "2026-11-27", "condicion": "credito", "plazo_dias": 60, "moneda": "PYG",
+  "precios_incluyen_iva": true,
   "items": [
     {"descripcion": "Varilla conformada 12 mm x 12 m", "unidad": "BARRA",
-     "cantidad": "100", "precio_unitario": "110000", "tasa_iva": 10, "precio_incluye_iva": true}
+     "cantidad": "100", "precio_unitario": "110000"}
   ]
 }
 ```
 
-Respuesta (extracto): `gravada_10 = 10000000.00`, `iva_10 = 1000000.00`,
-`total = 11000000.00`, `fecha_vencimiento = 2027-01-26`.
+Respuesta (extracto): `base_imponible = 10000000.00`, `iva = 1000000.00`,
+`total = 11000000.00`, `fecha_vencimiento = 2027-01-26`, `estado = pendiente`.
+`orden_compra` puede omitirse.
+
+Pago parcial de esa factura:
+
+```json
+{"cliente": 2, "fecha": "2026-12-10", "moneda": "PYG", "monto": "4000000",
+ "medio": "transferencia", "referencia": "SIPAP 889123",
+ "imputaciones": [{"factura": 15, "monto": "4000000"}]}
+```
+
+→ la factura queda `pagada_parcial` con `saldo = 7000000.00`.
 
 ### Roles
 
 | Acción | Administrador | Tesorero | Cobrador |
 |---|:-:|:-:|:-:|
-| Consultar clientes, facturas y OC | ✔ | ✔ | ✔ |
+| Consultar clientes, facturas, OC, pagos, alertas, cuenta corriente | ✔ | ✔ | ✔ |
+| Registrar gestiones de cobro y promesas de pago | ✔ | ✔ | ✔ (edita sólo las suyas) |
 | Crear o editar clientes, facturas y OC | ✔ | ✔ | |
+| Registrar, aplicar o anular pagos | ✔ | ✔ | |
 | Anular facturas, cambiar vencimientos | ✔ | ✔ | |
 | Consultar la auditoría | ✔ | | |
 | Gestionar usuarios (admin de Django) | ✔ | | |
@@ -224,7 +248,7 @@ obtiene acceso al admin de Django automáticamente.
 
 ### Auditoría
 
-Clientes, órdenes de compra y facturas registran en la tabla `auditoria` cada
+Clientes, órdenes de compra, facturas, pagos y gestiones de cobro registran en la tabla `auditoria` cada
 alta, cambio y baja: usuario, IP, fecha y hora, campos con valor anterior y
 nuevo, y el motivo si se informó. En facturas se auditan estado, vencimiento,
 plazo, importes, OC, datos SIFEN y anulación. La bitácora no se puede editar
@@ -235,11 +259,17 @@ ni borrar (tampoco desde el admin).
 - **Clientes:** RUC con dígito verificador módulo 11 de la SET, obligatorio
   para profesionales y pymes. Crédito sólo a 30, 60 o 90 días y con límite
   mayor a 0. `requiere_orden_compra` se calcula a partir del tipo de cliente.
-- **IVA 10% (Ley 6380/2019):** cada ítem indica `precio_incluye_iva`. Si es
-  `true` (lo habitual en Paraguay) el IVA se **extrae** (total ÷ 11); si es
-  `false` se **suma**. El sistema nunca vuelve a aplicar IVA a un precio que ya
-  lo incluye, y antes de guardar verifica que el IVA corresponda a la base. Se
-  admiten 10%, 5% y exento. Guaraníes sin decimales y USD con 2.
+- **IVA 10% exacto (Ley 6380/2019):** la factura guarda `base_imponible`,
+  `iva` y `total`, siempre calculados por el sistema (no se aceptan desde la
+  API). El IVA es **exactamente el 10% de la base**, redondeado a la unidad de
+  la moneda (Gs. sin decimales, USD con 2). Se valida en el modelo y además con
+  una restricción `CHECK` en PostgreSQL, así que ningún proceso puede guardar
+  otro valor. Con `precios_incluyen_iva = true` (lo habitual) el IVA se
+  **extrae**: `base = total × 100/110`, `IVA = base × 10%`. Con `false` se suma.
+  Nunca se aplica IVA sobre un precio que ya lo incluye. Por el redondeo a
+  guaraníes enteros, base + IVA puede diferir del total en 1 Gs. en algunos
+  importes (es la misma secuencia de cálculo del Manual Técnico SIFEN;
+  confirmarlo con el proveedor del facturador electrónico).
 - **Orden de compra:** opcional para profesionales y pymes (el campo se
   muestra, pero no bloquea la venta) y rechazada para particulares. Con
   `CRM_EXIGIR_OC=true` vuelve a ser obligatoria para profesionales y pymes. Debe ser del mismo cliente y la misma moneda, y lo facturado no
@@ -257,6 +287,47 @@ ni borrar (tampoco desde el admin).
   SET y KuDE. Un documento aprobado no se puede modificar ni anular desde el
   CRM: primero hay que registrar la cancelación ante la SET. La emisión y el
   envío del XML **no** están implementados (ver nota SIFEN más arriba).
+
+- **Estados de factura:** `pendiente` → `pagada_parcial` → `pagada`, o
+  `vencida` si pasa la fecha de vencimiento con saldo (aunque tenga pagos
+  parciales; lo cobrado se ve en `monto_cobrado`). `anulada` se conserva para
+  anulaciones. El cambio a vencida lo hace el comando diario
+  `actualizar_vencidas` y también cualquier pago o edición posterior.
+
+### Cobranzas
+
+- **Contado:** `cobro-contado` crea el pago por el saldo y deja la factura
+  `pagada` en una sola operación.
+- **Pagos parciales:** un pago puede repartirse entre varias facturas del mismo
+  cliente y la misma moneda, sin superar el saldo de ninguna. Lo no aplicado
+  queda como saldo a favor para usarlo después. `aplicar_automatico` imputa
+  de la factura que vence primero a la que vence última. Anular un pago
+  (cheque rechazado, error) restituye los saldos. Transferencias y cheques
+  exigen número de referencia. El comprobante de retención de IVA se registra
+  como un pago con medio `retencion`.
+- **Gestiones de cobro (no intimidatorias):** se registra el historial de
+  llamadas, correos, WhatsApp, visitas, notas y promesas de pago. Reglas
+  configurables en `/admin/` → Parámetros de cobranza:
+  - contacto sólo de 8:00 a 19:00 de lunes a viernes, sábados hasta 12:00, ni
+    domingos ni feriados (tabla `Feriado`);
+  - máximo 3 contactos por cliente en 7 días;
+  - sólo con el titular o un contacto autorizado, nunca con terceros;
+  - WhatsApp/SMS sólo si el cliente lo autorizó (`acepta_whatsapp`);
+  - se rechazan mensajes con amenazas (cárcel, embargo inmediato), falsedades o
+    insultos, o que mencionen a la familia o al empleador.
+
+  Las notas internas no tienen restricción de horario. Las promesas vencidas
+  se marcan como cumplidas o incumplidas con el comando diario
+  `evaluar_promesas`. Ajustar la lista de expresiones y los horarios con la
+  asesoría legal (Ley 1334/98 de Defensa del Consumidor).
+
+### Tareas programadas
+
+Ejecutar una vez por día (cron o el programador del servidor):
+
+```bash
+python manage.py actualizar_vencidas && python manage.py evaluar_promesas
+```
 
 ## Próximas etapas
 

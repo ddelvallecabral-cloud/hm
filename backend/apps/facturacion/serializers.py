@@ -30,13 +30,13 @@ class ItemFacturaSerializer(serializers.ModelSerializer):
     class Meta:
         model = ItemFactura
         exclude = ["factura"]
-        read_only_fields = ["base_imponible", "iva", "total"]
+        read_only_fields = ["importe"]
 
 
 class FacturaSerializer(serializers.ModelSerializer):
     items = ItemFacturaSerializer(many=True)
     numero_completo = serializers.CharField(read_only=True)
-    iva_total = serializers.DecimalField(max_digits=18, decimal_places=2, read_only=True)
+    monto_cobrado = serializers.DecimalField(max_digits=18, decimal_places=2, read_only=True)
     cliente_razon_social = serializers.CharField(source="cliente.razon_social", read_only=True)
     requiere_orden_compra = serializers.BooleanField(source="cliente.requiere_orden_compra", read_only=True)
     orden_compra_numero = serializers.CharField(source="orden_compra.numero", read_only=True, default=None)
@@ -45,7 +45,7 @@ class FacturaSerializer(serializers.ModelSerializer):
         model = Factura
         fields = "__all__"
         read_only_fields = [
-            "gravada_10", "iva_10", "gravada_5", "iva_5", "exenta", "total", "retencion_iva", "saldo",
+            "base_imponible", "iva", "total", "retencion_iva", "saldo",
             "estado", "fecha_vencimiento", "motivo_anulacion", "creado_por", "creado_en", "actualizado_en",
         ]
 

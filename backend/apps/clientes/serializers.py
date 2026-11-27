@@ -12,7 +12,7 @@ class ClienteSerializer(serializers.ModelSerializer):
         fields = [
             "id", "ruc", "razon_social", "tipo", "tipo_display",
             "condicion_pago", "plazo_dias", "limite_credito", "requiere_orden_compra",
-            "contacto_cobranza", "telefono_cobranza", "email_cobranza", "direccion", "ciudad",
+            "contacto_cobranza", "telefono_cobranza", "email_cobranza", "direccion", "ciudad", "acepta_whatsapp",
             "activo", "creado_en", "actualizado_en",
         ]
         read_only_fields = ["requiere_orden_compra", "creado_en", "actualizado_en"]

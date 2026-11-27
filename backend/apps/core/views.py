@@ -44,3 +44,16 @@ class AuditLogListView(generics.ListAPIView):
             if p.get(campo):
                 qs = qs.filter(**{filtro: p[campo]})
         return qs
+
+
+def montos_a_texto(obj):
+    """Convierte Decimal a str en estructuras anidadas (los montos nunca se envían como float)."""
+    from decimal import Decimal
+
+    if isinstance(obj, Decimal):
+        return f"{obj:.2f}"
+    if isinstance(obj, dict):
+        return {k: montos_a_texto(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [montos_a_texto(v) for v in obj]
+    return obj
