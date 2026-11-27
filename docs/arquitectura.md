@@ -8,7 +8,7 @@
 | `clientes` | Ficha de cliente: RUC con dígito verificador, tipo (particular / profesional / pyme), condición de pago, plazo y límite de crédito, contacto de cobranza | `Cliente` |
 | `facturacion` | Facturas con base / IVA 10% / total, estados, datos SIFEN (CDC, timbrado, estado del DTE), OC opcional para profesionales y pymes, prohibida para particulares | `Factura`, `ItemFactura`, `OrdenCompra` |
 | `cobranzas` | Cobro al contado, pagos (uno por factura) totales o parciales, historial de gestiones y promesas de pago con reglas de cobranza no intimidatoria, alertas, cuenta corriente | `Pago`, `GestionCobro`, `ParametrosCobranza`, `Feriado` |
-| `intereses` | Tabla paramétrica de tasas máximas del BCP por mes y moneda, cálculo de mora y punitorio (Art. 475 CC, Art. 44 Ley 489/95), simulador | `TasaReferenciaBCP`, `ConfiguracionIntereses` |
+| `intereses` | Tabla de tasas máximas del BCP por mes y moneda, cálculo del interés moratorio (Art. 475 CC, Art. 44 Ley 489/95), alertas de ajuste, simulador | `TasaReferenciaBCP`, `AlertaTasa` |
 | `tesoreria` | DSO, aging (corriente, 1-30, 31-60, 61-90, 90+), proyección de flujo de caja, alertas de vencimiento; siempre separado por moneda | (sin modelos propios) |
 | `reportes` | Estado de cuenta, morosidad, IVA débito fiscal por período, OC pendientes de conciliación | (sin modelos propios) |
 
@@ -36,6 +36,8 @@ Dependencias entre módulos: `core` ← `clientes` ← `facturacion` ← `cobran
    paso a pagada_parcial / pagada, estado "vencida y en proceso de pago
    parcial", cálculo del saldo pendiente, buscador por cliente o número,
    gestiones de cobro con alertas y revisión de tesorería, datos demo.
-5. **Intereses por mora**: tasas BCP, motor de cálculo, simulador.
+5. ✅ **Intereses por mora**: tabla de tasas BCP, cálculo con tope del mes de
+   vencimiento y 1% mensual en USD, sin capitalización, alertas de ajuste,
+   consulta a una fecha (simulador) e interés informativo en la pantalla.
 6. **Tesorería y reportes**: DSO, aging, flujo de caja, IVA por período, morosidad.
 7. **Frontend** por módulo e **integración SIFEN** real.

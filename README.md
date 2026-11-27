@@ -5,10 +5,10 @@ crédito, facturas en **PYG** y **USD** con **IVA 10%**, clientes
 **particulares / profesionales / pymes**, datos compatibles con **SIFEN** e
 **intereses por mora** según los topes del **BCP**.
 
-> **Estado: fase 4** — clientes, roles, auditoría, facturación (IVA 10% exacto),
-> cobranzas (contado, pagos parciales, gestiones con alertas) y la pantalla
-> **Registrar cobranza**. Intereses por mora, tesorería y reportes vienen en las
-> fases siguientes; ver [`docs/arquitectura.md`](docs/arquitectura.md).
+> **Estado: fase 5** — clientes, roles, auditoría, facturación (IVA 10% exacto),
+> cobranzas, pantalla **Registrar cobranza** e **intereses por mora** con topes
+> del BCP. Tesorería y reportes vienen en las fases siguientes; ver
+> [`docs/arquitectura.md`](docs/arquitectura.md).
 
 ## Stack
 
@@ -198,6 +198,9 @@ Todas están en [`backend/.env.example`](backend/.env.example).
 | `CORS_ALLOWED_ORIGINS`, `CSRF_TRUSTED_ORIGINS` | Origen del frontend | `http://localhost:5173` | URL https del frontend |
 | `CRM_MONEDA_BASE` | Moneda de consolidación | `PYG` | `PYG` |
 | `CRM_EXIGIR_OC` | Exigir N° de OC a profesionales y pymes | `false` | `false` |
+| `CRM_TOPE_MENSUAL_USD` | Tope adicional para intereses en USD (% mensual) | `1.00` | `1.00` |
+| `CRM_USAR_TASA_BCP_SIN_PACTO` | Si la factura no pactó tasa, usar el tope legal como tasa moratoria | `true` | según asesoría legal |
+| `CRM_PERMITIR_TASA_MES_ANTERIOR` | Si falta la tasa BCP del mes, usar la última cargada (con alerta) | `true` | `true` |
 | `EMPRESA_RUC`, `EMPRESA_TIMBRADO` | Datos del emisor | — | datos reales |
 | `SIFEN_AMBIENTE` | `test` / `prod` de la SET | `test` | `prod` |
 | `SIFEN_URL_WS`, `SIFEN_CERT_PATH`, `SIFEN_CERT_PASSWORD`, `SIFEN_ID_CSC`, `SIFEN_CSC` | Integración de facturación electrónica | vacías | ver nota |
@@ -244,6 +247,11 @@ básica). Los montos se envían y devuelven como texto decimal.
 | POST | `/api/cobranzas/gestiones/verificar/` | todos | Alertas que tendría una gestión, sin guardarla |
 | GET | `/api/cobranzas/recomendaciones/?factura=` | todos | Tono, canal y mensaje sugerido según los días de atraso |
 | GET | `/api/cobranzas/alertas/` | todos | Próximas a vencer (`?dias=`) y vencidas con días de atraso |
+| GET | `/api/intereses/facturas/<id>/?fecha=` | todos | Interés moratorio a hoy o a una fecha (futura = simulador) |
+| GET, POST | `/api/intereses/tasas-bcp/` | lectura todos / alta administrador | Tasas máximas BCP por mes y moneda (`?moneda=&anio=`) |
+| PATCH | `/api/intereses/tasas-bcp/<id>/` | administrador | Corregir una tasa cargada |
+| GET | `/api/intereses/alertas/?revisada=false` | todos | Facturas con tasa ajustada al tope o calculadas con la tasa de un mes anterior |
+| POST | `/api/intereses/alertas/<id>/revisada/` | tesorero | Marcar alerta como revisada |
 | GET | `/api/cobranzas/cuenta-corriente/<cliente_id>/` | todos | Facturas abiertas, saldo vencido y últimos pagos por moneda |
 
 Ejemplo de alta de factura a crédito para una pyme:
@@ -380,6 +388,88 @@ ni borrar (tampoco desde el admin).
   `/admin/` → Parámetros de cobranza y deben revisarse con la asesoría legal
   (Ley 1334/98 de Defensa del Consumidor). Las promesas vencidas se marcan como
   cumplidas o incumplidas con el comando diario `evaluar_promesas`.
+
+### Intereses por mora
+
+**Base legal aplicada** (validar con la asesoría legal):
+
+- **Código Civil, Art. 475:** los intereses moratorios no pueden superar las
+  tasas máximas fijadas por el BCP; lo pactado por encima es nulo en el exceso.
+- **Ley N° 489/95, Art. 44 (mod. por Ley N° 2339/03):** desde la mora, el
+  interés compensatorio pactado pasa a ser moratorio y no puede superar la tasa
+  originalmente pactada. No se capitalizan intereses.
+- **Moneda extranjera:** además del tope BCP para USD, se aplica un tope de
+  **1% mensual** (12% anual, `CRM_TOPE_MENSUAL_USD`); se usa el menor.
+
+**Tabla `tasas_referencia_bcp`** (`TasaReferenciaBCP`): mes, año, moneda
+(PYG/USD), tasa máxima anual y fuente (resolución o comunicado del BCP). No hay
+tasas fijas en el código: un administrador carga cada mes el valor publicado
+desde `/admin/` o la API. `python manage.py cargar_tasas_ejemplo` carga los
+valores de referencia de enero y agosto de 2026 (PYG 27,06% y 27,26%; USD
+11,04% y 11,25%) indicados en la especificación; **verificarlos contra la
+publicación oficial del BCP** antes de usarlos.
+
+**`calcular_interes_moratorio(factura, fecha_calculo)`** (`apps/intereses/services.py`):
+
+1. Sólo actúa si la factura está vencida a la fecha de cálculo y tiene saldo.
+2. Toma la tasa pactada de la factura (`tasa_interes_anual`) y la compara con
+   el tope del **mes de vencimiento** (y el 1% mensual en USD). Si la supera, la
+   ajusta al tope y registra una alerta (`AlertaTasa`, visible en
+   `/api/intereses/alertas/` y en el admin). Si la factura no pactó tasa, usa
+   el tope como tasa de referencia (configurable). Si falta la tasa BCP del mes,
+   usa la última cargada y registra otra alerta; si no hay ninguna, no calcula
+   y pide cargarla.
+3. Interés diario = saldo de capital × tasa moratoria / 365.
+4. Multiplica por los días de atraso, contados desde el día siguiente al vencimiento.
+5. Nunca capitaliza: la base es sólo el capital. Si hubo pagos después del
+   vencimiento, el cálculo se divide en tramos (cada pago reduce el capital
+   desde su fecha) y los intereses nunca se suman a la base.
+6. Devuelve capital, días de atraso, tasa pactada, topes, tasa aplicada (anual
+   y diaria), interés diario, interés acumulado, total, tramos y alertas.
+
+El redondeo se hace una sola vez al final (Gs. sin decimales, USD con 2). La
+pantalla "Registrar cobranza" muestra el interés a hoy como dato informativo:
+los pagos se aplican al capital. Cobrar el interés requiere emitir el
+documento correspondiente (nota de débito o factura); definir su tratamiento
+de IVA con el contador.
+
+#### Ejemplo 1 — Factura en guaraníes vencida hace 45 días
+
+| Dato | Valor |
+|---|---|
+| Saldo de capital | Gs. 15.000.000 |
+| Vencimiento | 10/08/2026 · fecha de cálculo 24/09/2026 |
+| Tasa pactada | 30% anual |
+| Tope BCP PYG 08/2026 | 27,26% anual |
+
+1. La factura está vencida: corresponde calcular.
+2. 30% > 27,26% → la tasa se **ajusta a 27,26%** y se registra la alerta.
+3. Interés diario = 15.000.000 × 27,26% / 365 = **Gs. 11.202,74**
+4. Días de atraso: del 11/08 al 24/09 = **45 días**.
+5. Interés acumulado = 11.202,7397 × 45 = 504.123,29 → **Gs. 504.123**
+6. Total a cobrar = 15.000.000 + 504.123 = **Gs. 15.504.123**
+
+#### Ejemplo 2 — Factura en dólares vencida hace 20 días
+
+| Dato | Valor |
+|---|---|
+| Saldo de capital | US$ 25.000,00 |
+| Vencimiento | 20/08/2026 · fecha de cálculo 09/09/2026 |
+| Tasa pactada | 0% (sin interés explícito) |
+| Tope BCP USD 08/2026 | 11,25% anual |
+| Tope 1% mensual | 12% anual |
+
+1. La factura está vencida: corresponde calcular.
+2. Tope aplicable = el menor entre 11,25% y 12% = **11,25%**. Sin tasa
+   pactada, se usa el tope como tasa de referencia (queda indicado en las alertas).
+3. Interés diario = 25.000 × 11,25% / 365 = **US$ 7,7055**
+4. Días de atraso: del 21/08 al 09/09 = **20 días**.
+5. Interés acumulado = 7,70548 × 20 = 154,1096 → **US$ 154,11**
+6. Total a cobrar = 25.000,00 + 154,11 = **US$ 25.154,11**
+
+Si la tasa BCP de USD de ese mes fuera, por ejemplo, 13,5%, el tope de 1%
+mensual (12%) sería el más bajo y la tasa se ajustaría a 12%. Los tres casos
+están cubiertos por tests en `apps/intereses/tests/test_interes.py`.
 
 ### Tareas programadas
 

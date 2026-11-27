@@ -155,6 +155,18 @@ export default function RegistrarCobranza({ usuario }) {
               <div><dt>Cobrado</dt><dd className="num">{monto(factura.cobrado, factura.moneda)}</dd></div>
               <div className="destacado"><dt>Saldo pendiente</dt><dd className="num">{monto(factura.saldo, factura.moneda)}</dd></div>
             </dl>
+            {factura.interes_mora && !factura.interes_mora.error && (
+              <div className="interes">
+                <p>
+                  <strong>Interés por mora a hoy: {monto(factura.interes_mora.interes, factura.moneda)}</strong>{" "}
+                  ({factura.interes_mora.dias} días al {Number(factura.interes_mora.tasa_anual).toLocaleString("es-PY")}% anual
+                  {factura.interes_mora.tasa_ajustada ? ", tasa ajustada al tope legal" : ""}).
+                  Total con interés: <span className="num">{monto(factura.interes_mora.total_con_interes, factura.moneda)}</span>.
+                </p>
+                <p className="ayuda">Informativo: este pago se aplica al capital. El interés se calcula sólo sobre el capital y no se suma al saldo.</p>
+              </div>
+            )}
+            {factura.interes_mora?.error && <p className="msg msg-aviso">{factura.interes_mora.error}</p>}
 
             {!puedeCobrar && (
               <p className="msg msg-aviso">Su rol ({usuario.rol}) puede consultar, pero sólo tesorería registra pagos.</p>

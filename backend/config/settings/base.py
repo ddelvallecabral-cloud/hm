@@ -1,4 +1,5 @@
 """Configuración común a todos los entornos."""
+from decimal import Decimal
 from pathlib import Path
 
 from config.env import cargar_dotenv, env, env_bool, env_int, env_list
@@ -104,6 +105,10 @@ CRM = {
     "MONEDA_BASE": env("CRM_MONEDA_BASE", "PYG"),
     # Orden de compra: opcional para profesionales/pymes salvo que se active aquí.
     "EXIGIR_OC": env_bool("CRM_EXIGIR_OC", False),
+    # Intereses por mora (fase 5)
+    "TOPE_MENSUAL_USD": Decimal(env("CRM_TOPE_MENSUAL_USD", "1.00")),  # % mensual para moneda extranjera
+    "USAR_TASA_BCP_SIN_PACTO": env_bool("CRM_USAR_TASA_BCP_SIN_PACTO", True),
+    "PERMITIR_TASA_MES_ANTERIOR": env_bool("CRM_PERMITIR_TASA_MES_ANTERIOR", True),
     # SIFEN - Facturación electrónica (SET). Integración real pendiente.
     "SIFEN_AMBIENTE": env("SIFEN_AMBIENTE", "test"),  # test | prod
     "SIFEN_URL_WS": env("SIFEN_URL_WS", ""),

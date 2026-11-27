@@ -29,6 +29,9 @@ class Command(BaseCommand):
 
     @transaction.atomic
     def handle(self, *args, **opts):
+        from django.core.management import call_command
+
+        call_command("cargar_tasas_ejemplo", stdout=self.stdout)
         if len(opts["clave"]) < 10:
             raise CommandError("La contraseña debe tener al menos 10 caracteres.")
         if Cliente.objects.filter(razon_social__endswith="(DEMO)").exists():
@@ -66,7 +69,8 @@ class Command(BaseCommand):
             fac(juan, [(*varilla, 20, 98_000), ("Alambre recocido N° 18", "KG", 10, 18_500)], 0)
             fac(arq, [(*varilla, 150, 96_500)], 10, "credito", 30)                      # pendiente
             f3 = fac(arq, [("Perfil C 100x50x15x2 mm", "BARRA", 60, 210_000)], 45, "credito", 30)  # vencida
-            f4 = fac(pyme, [(*varilla, 900, 95_000)], 70, "credito", 60, orden_compra=oc)  # vencida, pago parcial
+            f4 = fac(pyme, [(*varilla, 900, 95_000)], 70, "credito", 60, orden_compra=oc,
+                     tasa_interes_anual=Decimal("30"))                     # vencida, pago parcial, tasa > tope
             f5 = fac(pyme, [("Malla electrosoldada 15x15 Ø6", "UNI", 120, 345_000)], 20, "credito", 60,
                      orden_compra=oc)                                                      # pago parcial
             fac(pyme, [("Chapa lisa 1,2 mm 1x2 m", "UNI", 300, Decimal("9.40"))], 5, "credito", 60, moneda="USD",
@@ -77,4 +81,4 @@ class Command(BaseCommand):
                                usuario=tes, referencia="CH 004512", banco="Banco demo")
             del f3
         self.stdout.write(self.style.SUCCESS(
-            "Datos demo cargados: usuarios demo_tesorero / demo_cobrador, 3 clientes y 6 facturas."))
+            "Datos demo cargados: usuarios demo_tesorero / demo_cobrador, 3 clientes, 6 facturas y tasas BCP de ejemplo."))
