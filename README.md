@@ -157,6 +157,7 @@ Todas están en [`backend/.env.example`](backend/.env.example).
 | `DB_CONN_MAX_AGE` | Conexiones persistentes (s) | 60 | 60 |
 | `CORS_ALLOWED_ORIGINS`, `CSRF_TRUSTED_ORIGINS` | Origen del frontend | `http://localhost:5173` | URL https del frontend |
 | `CRM_MONEDA_BASE` | Moneda de consolidación | `PYG` | `PYG` |
+| `CRM_EXIGIR_OC` | Exigir N° de OC a profesionales y pymes | `false` | `false` |
 | `EMPRESA_RUC`, `EMPRESA_TIMBRADO` | Datos del emisor | — | datos reales |
 | `SIFEN_AMBIENTE` | `test` / `prod` de la SET | `test` | `prod` |
 | `SIFEN_URL_WS`, `SIFEN_CERT_PATH`, `SIFEN_CERT_PASSWORD`, `SIFEN_ID_CSC`, `SIFEN_CSC` | Integración de facturación electrónica | vacías | ver nota |
@@ -239,8 +240,9 @@ ni borrar (tampoco desde el admin).
   `false` se **suma**. El sistema nunca vuelve a aplicar IVA a un precio que ya
   lo incluye, y antes de guardar verifica que el IVA corresponda a la base. Se
   admiten 10%, 5% y exento. Guaraníes sin decimales y USD con 2.
-- **Orden de compra:** obligatoria para profesionales y pymes y rechazada para
-  particulares. Debe ser del mismo cliente y la misma moneda, y lo facturado no
+- **Orden de compra:** opcional para profesionales y pymes (el campo se
+  muestra, pero no bloquea la venta) y rechazada para particulares. Con
+  `CRM_EXIGIR_OC=true` vuelve a ser obligatoria para profesionales y pymes. Debe ser del mismo cliente y la misma moneda, y lo facturado no
   puede superar su monto. Su estado (abierta / parcial / facturada) se actualiza solo.
 - **Crédito:** el cliente debe tener crédito habilitado y el plazo no puede
   superar el pactado. El vencimiento se calcula como emisión + plazo. La deuda

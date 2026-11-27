@@ -53,8 +53,16 @@ class FacturaTest(FacturaApiBase):
         self.assertEqual(r.status_code, 400)
         self.assertIn("orden_compra", r.json())
 
-    def test_pyme_exige_oc(self):
+    def test_pyme_puede_facturar_sin_oc(self):
         r = self.factura(self.pyme, condicion="credito", plazo_dias=60)
+        self.assertEqual(r.status_code, 201, r.content)
+        self.assertTrue(r.json()["requiere_orden_compra"])
+        self.assertIsNone(r.json()["orden_compra"])
+
+    def test_oc_obligatoria_si_se_activa_la_configuracion(self):
+        from django.conf import settings
+        with self.settings(CRM={**settings.CRM, "EXIGIR_OC": True}):
+            r = self.factura(self.pyme, condicion="credito", plazo_dias=60)
         self.assertEqual(r.status_code, 400)
         self.assertIn("orden_compra", r.json())
 

@@ -48,7 +48,7 @@ class Cliente(AuditableModel):
     )
     requiere_orden_compra = models.BooleanField(
         default=False, editable=False,
-        help_text="Se deriva del tipo: True para profesionales y pymes, False para particulares.",
+        help_text="Se deriva del tipo: True para profesionales y pymes (el campo OC se muestra; es opcional salvo CRM_EXIGIR_OC=true), False para particulares (sin OC).",
     )
 
     # --- Contacto para cobranza ---

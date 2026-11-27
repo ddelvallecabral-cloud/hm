@@ -1,6 +1,7 @@
 from datetime import timedelta
 from decimal import Decimal
 
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator, RegexValidator
 from django.db import models
@@ -234,7 +235,9 @@ class Factura(AuditableModel):
             # Orden de Compra según tipo de cliente
             if not c.requiere_orden_compra and self.orden_compra_id:
                 errores["orden_compra"] = "Los clientes particulares no manejan Orden de Compra."
-            elif c.requiere_orden_compra and not self.orden_compra_id:
+            elif c.requiere_orden_compra and not self.orden_compra_id and settings.CRM["EXIGIR_OC"]:
+                # Por defecto la OC es OPCIONAL para profesionales y pymes (no bloquea la venta).
+                # Con CRM_EXIGIR_OC=true vuelve a ser obligatoria.
                 errores["orden_compra"] = f"El N° de OC es obligatorio para clientes {c.get_tipo_display().lower()}."
             elif self.orden_compra_id:
                 oc = self.orden_compra
