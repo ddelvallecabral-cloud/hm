@@ -1,0 +1,38 @@
+# Entorno de desarrollo: PostgreSQL + backend Django + frontend Vite.
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-tesoreria}
+      POSTGRES_USER: ${POSTGRES_USER:-tesoreria}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tesoreria}
+      TZ: America/Asuncion
+    ports: ["5432:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-tesoreria}"]
+      interval: 5s
+      retries: 10
+
+  backend:
+    build: { context: ./backend, args: { REQUIREMENTS: dev } }
+    command: sh -c "python manage.py migrate && python manage.py runserver 0.0.0.0:8000"
+    env_file: [./backend/.env]
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.dev
+      POSTGRES_HOST: db
+    volumes: ["./backend:/app"]
+    ports: ["8000:8000"]
+    depends_on: { db: { condition: service_healthy } }
+
+  frontend:
+    image: node:22-alpine
+    working_dir: /app
+    command: sh -c "npm install && npm run dev -- --host"
+    environment: { VITE_PROXY_TARGET: "http://backend:8000" }
+    volumes: ["./frontend:/app"]
+    ports: ["5173:5173"]
+    depends_on: [backend]
+
+volumes:
+  pgdata:

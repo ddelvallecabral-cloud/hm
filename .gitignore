@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+backend/.env
+backend/media/
+backend/staticfiles/
+*.sqlite3
+# Certificados SIFEN y secretos
+*.p12
+*.pfx
+*.pem
+# Node
+frontend/node_modules/
+frontend/dist/
+frontend/.env
+# Editor / SO
+.idea/
+.vscode/
+.DS_Store
