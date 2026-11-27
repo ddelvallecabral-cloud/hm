@@ -1,4 +1,6 @@
-from django.urls import path  # noqa: F401
+from django.urls import path
+
+from . import views
 
 app_name = "tesoreria"
-urlpatterns: list = []  # endpoints pendientes
+urlpatterns = [path("dashboard/", views.dashboard, name="dashboard")]

@@ -10,7 +10,7 @@
 | `cobranzas` | Cobro al contado, pagos (uno por factura) totales o parciales, historial de gestiones y promesas de pago con reglas de cobranza no intimidatoria, alertas, cuenta corriente | `Pago`, `GestionCobro`, `ParametrosCobranza`, `Feriado` |
 | `intereses` | Tabla de tasas máximas del BCP por mes y moneda, cálculo del interés moratorio (Art. 475 CC, Art. 44 Ley 489/95), alertas de ajuste, simulador | `TasaReferenciaBCP`, `AlertaTasa` |
 | `tesoreria` | DSO, aging (corriente, 1-30, 31-60, 61-90, 90+), proyección de flujo de caja, alertas de vencimiento; siempre separado por moneda | (sin modelos propios) |
-| `reportes` | Estado de cuenta, morosidad, IVA débito fiscal por período, OC pendientes de conciliación | (sin modelos propios) |
+| `reportes` | Estado de cuenta, IVA débito fiscal por período, OC pendientes de conciliación, exportación CSV | (sin modelos propios) |
 
 Dependencias entre módulos: `core` ← `clientes` ← `facturacion` ← `cobranzas`;
 `intereses` lee `facturacion` y `cobranzas`; `tesoreria` y `reportes` sólo leen.
@@ -39,5 +39,7 @@ Dependencias entre módulos: `core` ← `clientes` ← `facturacion` ← `cobran
 5. ✅ **Intereses por mora**: tabla de tasas BCP, cálculo con tope del mes de
    vencimiento y 1% mensual en USD, sin capitalización, alertas de ajuste,
    consulta a una fecha (simulador) e interés informativo en la pantalla.
-6. **Tesorería y reportes**: DSO, aging, flujo de caja, IVA por período, morosidad.
+6. ✅ **Dashboard y reportes**: cartera por aging con interés por mora,
+   totales PYG/USD, DSO y cobro real promedio; estado de cuenta, IVA débito
+   fiscal por período y OC pendientes de conciliación; exportación CSV.
 7. **Frontend** por módulo e **integración SIFEN** real.

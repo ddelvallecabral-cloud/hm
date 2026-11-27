@@ -5,9 +5,9 @@ crédito, facturas en **PYG** y **USD** con **IVA 10%**, clientes
 **particulares / profesionales / pymes**, datos compatibles con **SIFEN** e
 **intereses por mora** según los topes del **BCP**.
 
-> **Estado: fase 5** — clientes, roles, auditoría, facturación (IVA 10% exacto),
-> cobranzas, pantalla **Registrar cobranza** e **intereses por mora** con topes
-> del BCP. Tesorería y reportes vienen en las fases siguientes; ver
+> **Estado: fase 6** — clientes, roles, auditoría, facturación (IVA 10% exacto),
+> cobranzas, pantalla **Registrar cobranza**, **intereses por mora** con topes
+> del BCP, **dashboard de cartera** y **reportes**. Ver
 > [`docs/arquitectura.md`](docs/arquitectura.md).
 
 ## Stack
@@ -247,6 +247,10 @@ básica). Los montos se envían y devuelven como texto decimal.
 | POST | `/api/cobranzas/gestiones/verificar/` | todos | Alertas que tendría una gestión, sin guardarla |
 | GET | `/api/cobranzas/recomendaciones/?factura=` | todos | Tono, canal y mensaje sugerido según los días de atraso |
 | GET | `/api/cobranzas/alertas/` | todos | Próximas a vencer (`?dias=`) y vencidas con días de atraso |
+| GET | `/api/tesoreria/dashboard/?moneda=&fecha=&dias_dso=90` | todos | Cartera agrupada por aging, interés por mora por factura, totales PYG/USD y DSO (`&formato=csv`) |
+| GET | `/api/reportes/estado-cuenta/<cliente_id>/?desde=&hasta=` | todos | Estado de cuenta por moneda con saldo inicial, movimientos y pendientes con interés (`&formato=csv`) |
+| GET | `/api/reportes/iva/?anio=&mes=` | todos | IVA débito fiscal del mes, en Gs. (`&formato=csv`) |
+| GET | `/api/reportes/oc-pendientes/?cliente=` | todos | Facturas con OC y saldo, y OC con monto sin facturar (`&formato=csv`) |
 | GET | `/api/intereses/facturas/<id>/?fecha=` | todos | Interés moratorio a hoy o a una fecha (futura = simulador) |
 | GET, POST | `/api/intereses/tasas-bcp/` | lectura todos / alta administrador | Tasas máximas BCP por mes y moneda (`?moneda=&anio=`) |
 | PATCH | `/api/intereses/tasas-bcp/<id>/` | administrador | Corregir una tasa cargada |
@@ -470,6 +474,41 @@ de IVA con el contador.
 Si la tasa BCP de USD de ese mes fuera, por ejemplo, 13,5%, el tope de 1%
 mensual (12%) sería el más bajo y la tasa se ajustaría a 12%. Los tres casos
 están cubiertos por tests en `apps/intereses/tests/test_interes.py`.
+
+### Dashboard y reportes
+
+Pantallas en <http://localhost:5173>: **Dashboard**, **Registrar cobranza** y
+**Reportes**. Todos los roles pueden verlas. Cada vista y reporte se puede
+descargar en CSV (separador `;`, abre directo en Excel).
+
+**Dashboard de cartera** (`#dashboard`):
+
+- Facturas con saldo agrupadas por aging según los días de atraso a la fecha
+  de corte: corriente (no vencidas), 1–30, 31–60, 61–90 y más de 90 días.
+- Columna **Interés por mora acumulado** por factura (mismo cálculo de la
+  fase 5) y total con interés. Filtro por moneda: todas, PYG o USD.
+- **Total de cartera por cobrar** separado en PYG y USD (nunca se suman
+  monedas), con lo vencido y el interés acumulado.
+- **DSO** = cuentas por cobrar a crédito ÷ ventas a crédito de los últimos 90
+  días × 90. Se muestra además el **cobro real promedio**: días entre emisión y
+  pago de los cobros del período, ponderado por monto.
+- Fecha de corte opcional: recalcula saldos, aging e intereses a esa fecha.
+
+**Reportes** (`#reportes`):
+
+- **Estado de cuenta por cliente:** por moneda, saldo inicial al comienzo del
+  período, facturas (debe) y pagos (haber) con saldo acumulado, totales, y las
+  facturas pendientes al cierre con su interés por mora.
+- **IVA por período (débito fiscal):** facturas emitidas en el mes, no
+  anuladas, con base imponible, IVA 10% y total; las de USD se convierten a
+  guaraníes con el tipo de cambio de cada factura. Muestra el débito fiscal,
+  las retenciones de IVA informadas y cuántas facturas aún no tienen
+  aprobación SIFEN; las rechazadas o canceladas en SIFEN se listan aparte y no
+  suman. Es un insumo para el Formulario 120; confirmar con el contador el
+  tipo de cambio exigido por la SET.
+- **Facturas con OC pendientes de conciliación:** facturas vinculadas a una
+  orden de compra que todavía tienen saldo, y órdenes de compra con monto aún
+  sin facturar.
 
 ### Tareas programadas
 
