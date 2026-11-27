@@ -91,10 +91,17 @@ class HistorialFacturaTest(TestCase):
     def test_tesorero_ve_quien_cambio_estado_y_vencimiento(self):
         r = api_de(self.tes).get(f"/api/facturacion/facturas/{self.f.pk}/historial/").json()
         self.assertTrue(r["ver_auditoria"])
-        cambios = [(a["usuario"], c["campo"], c["despues"]) for a in r["auditoria"] for c in a["cambios"]]
+        cambios = [(a["usuario"], c["campo"], c["despues_valor"]) for a in r["auditoria"] for c in a["cambios"]]
         self.assertIn(("tes", "fecha_vencimiento", (HOY + timedelta(days=45)).isoformat()), cambios)
         self.assertIn(("tes", "estado", "pagada_parcial"), cambios)
         self.assertIn(("tes", "anulado", True), cambios)          # anulación del pago
+        legibles = [(c["etiqueta"], c["antes"], c["despues"]) for a in r["auditoria"] for c in a["cambios"]]
+        self.assertIn(("Estado", "Pendiente", "Pagada parcialmente"), legibles)
+        self.assertIn(("Saldo", "Gs. 5.000.000", "Gs. 4.000.000"), legibles)
+        self.assertIn(("Vencimiento", (HOY + timedelta(days=30)).strftime("%d/%m/%Y"),
+                       (HOY + timedelta(days=45)).strftime("%d/%m/%Y")), legibles)
+        # La factura nunca figura como "pagada" al crearse (antes de sumar sus ítems).
+        self.assertNotIn("Pagada", [c["despues"] for a in r["auditoria"] for c in a["cambios"] if c["campo"] == "estado"])
         tipos = [e["tipo"] for e in r["linea_de_tiempo"]]
         self.assertIn("gestion", tipos)
         self.assertIn("pago", tipos)

@@ -1,13 +1,19 @@
-# CRM de Tesorería — Hierros y productos siderúrgicos (Paraguay)
+# CRM de Tesorería — Hierro Metal S.R.L.
 
-CRM para el departamento de Tesorería: seguimiento de cobranzas al contado y a
-crédito, facturas en **PYG** y **USD** con **IVA 10%**, clientes
-**particulares / profesionales / pymes**, datos compatibles con **SIFEN** e
-**intereses por mora** según los topes del **BCP**.
+CRM de **uso interno** del departamento de Tesorería de Hierro Metal S.R.L.
+(hierros y productos siderúrgicos, Paraguay): seguimiento de cobranzas al
+contado y a crédito, facturas en **PYG** y **USD** con **IVA 10%**, clientes
+**particulares / profesionales / pymes** e **intereses por mora** según los
+topes del **BCP**.
 
-> **Estado: fase 6** — clientes, roles, auditoría, facturación (IVA 10% exacto),
-> cobranzas, pantalla **Registrar cobranza**, **intereses por mora** con topes
-> del BCP, **dashboard de cartera** y **reportes**. Ver
+Las facturas las emite el sistema de facturación electrónica de la empresa; el
+CRM las **registra** (con su CDC, timbrado y estado SIFEN como referencia) para
+gestionar la cobranza. No emite documentos ni se conecta con la SET.
+
+> **Estado: fase 7** — todas las pantallas (dashboard, facturas, registrar
+> cobranza, gestiones, clientes, reportes, tasas BCP, usuarios y auditoría),
+> roles, auditoría de cambios, historial de gestiones por factura, intereses
+> por mora e identidad visual de la empresa. Ver
 > [`docs/arquitectura.md`](docs/arquitectura.md).
 
 ## Stack
@@ -39,7 +45,7 @@ las migraciones hacen trazables los cambios del esquema.
 │   ├── config/
 │   │   ├── env.py                 # lectura tipada de variables (+ .env en dev)
 │   │   ├── settings/
-│   │   │   ├── base.py            # común: apps, BD, zona horaria, DRF, parámetros CRM/SIFEN
+│   │   │   ├── base.py            # común: apps, BD, zona horaria, DRF, parámetros del CRM
 │   │   │   ├── dev.py             # DEBUG, email a consola, auth básica para probar la API
 │   │   │   ├── prod.py            # secretos obligatorios, HTTPS, HSTS, cookies seguras
 │   │   │   └── test.py            # tests
@@ -48,7 +54,7 @@ las migraciones hacen trazables los cambios del esquema.
 │   └── apps/
 │       ├── core/                  # usuarios, roles, auditoría, utilidades monetarias
 │       ├── clientes/              # ficha de cliente, RUC, tipo, crédito
-│       ├── facturacion/           # facturas, IVA 10%, SIFEN, órdenes de compra
+│       ├── facturacion/           # facturas, IVA 10%, datos SIFEN de referencia, OC
 │       ├── cobranzas/             # pagos, gestiones de cobro
 │       ├── intereses/             # tasas BCP, mora y punitorios PYG/USD
 │       ├── tesoreria/             # DSO, aging, flujo de caja, alertas
@@ -201,9 +207,7 @@ Todas están en [`backend/.env.example`](backend/.env.example).
 | `CRM_TOPE_MENSUAL_USD` | Tope adicional para intereses en USD (% mensual) | `1.00` | `1.00` |
 | `CRM_USAR_TASA_BCP_SIN_PACTO` | Si la factura no pactó tasa, usar el tope legal como tasa moratoria | `true` | según asesoría legal |
 | `CRM_PERMITIR_TASA_MES_ANTERIOR` | Si falta la tasa BCP del mes, usar la última cargada (con alerta) | `true` | `true` |
-| `EMPRESA_RUC`, `EMPRESA_TIMBRADO` | Datos del emisor | — | datos reales |
-| `SIFEN_AMBIENTE` | `test` / `prod` de la SET | `test` | `prod` |
-| `SIFEN_URL_WS`, `SIFEN_CERT_PATH`, `SIFEN_CERT_PASSWORD`, `SIFEN_ID_CSC`, `SIFEN_CSC` | Integración de facturación electrónica | vacías | ver nota |
+| `EMPRESA_RUC`, `EMPRESA_TIMBRADO` | Datos de la empresa | `80013339-0` | datos reales |
 | `EMAIL_HOST`, `EMAIL_PORT`, `EMAIL_HOST_USER`, `EMAIL_HOST_PASSWORD`, `DEFAULT_FROM_EMAIL` | Avisos de cobranza por correo | no se usan (consola) | SMTP real |
 | `SECURE_SSL_REDIRECT`, `SECURE_HSTS_SECONDS` | Endurecimiento HTTPS | — | `True`, `31536000` |
 
@@ -211,12 +215,6 @@ Frontend ([`frontend/.env.example`](frontend/.env.example)): `VITE_API_URL`
 (vacío = mismo origen) y `VITE_PROXY_TARGET` (backend al que el servidor de
 desarrollo de Vite redirige `/api`).
 
-> **Configuración adicional requerida (SIFEN):** para emitir documentos
-> electrónicos hace falta estar habilitado como facturador electrónico ante la
-> SET, contar con timbrado electrónico, un certificado digital de persona
-> jurídica emitido por un prestador habilitado y el CSC (código de seguridad)
-> que entrega la SET. Esas credenciales van sólo en variables de entorno o en
-> un gestor de secretos; los archivos `.p12/.pfx/.pem` están excluidos de git.
 
 ## API disponible
 
@@ -227,14 +225,17 @@ básica). Los montos se envían y devuelven como texto decimal.
 |---|---|---|---|
 | GET | `/api/health/` | público | Estado de la API y la base |
 | GET | `/api/core/me/` | todos | Usuario actual y rol |
-| GET | `/api/core/auditoria/` | administrador | Bitácora (`?modelo=facturacion.Factura&objeto_id=…&usuario=&accion=`) |
+| GET | `/api/core/auditoria/` | administrador | Bitácora (`?modelo=facturacion.Factura&objeto_id=&usuario=&accion=&campo=fecha_vencimiento&desde=&hasta=`) |
 | GET, POST | `/api/clientes/` | lectura todos / alta tesorero | Filtros `?tipo=&condicion_pago=&q=` |
 | GET, PATCH | `/api/clientes/<id>/` | lectura todos / edición tesorero | `motivo` opcional para la auditoría |
 | GET, POST | `/api/facturacion/ordenes-compra/` | lectura todos / alta tesorero | Sólo profesionales y pymes |
-| GET, POST | `/api/facturacion/facturas/` | lectura todos / alta tesorero | Alta con `items`; totales e IVA calculados |
-| GET, PATCH | `/api/facturacion/facturas/<id>/` | lectura todos / edición tesorero | Datos SIFEN, prórroga de vencimiento (con `motivo`), observaciones |
+| GET, POST | `/api/facturacion/facturas/` | lectura todos / alta tesorero | Búsqueda `?q=` (número, cliente o RUC); alta con `items`; totales e IVA calculados |
+| GET, PATCH | `/api/facturacion/facturas/<id>/` | lectura todos / edición tesorero | Datos SIFEN de referencia, prórroga de vencimiento (con `motivo`), observaciones |
 | POST | `/api/facturacion/facturas/<id>/anular/` | tesorero | Requiere `motivo` |
 | GET | `/api/core/csrf/`, POST `/api/core/login/`, `/api/core/logout/` | público / todos | Sesión para el frontend |
+| GET, POST | `/api/core/usuarios/` | administrador | Usuarios y roles (`?rol=&activo=`) |
+| PATCH | `/api/core/usuarios/<id>/` | administrador | Cambiar rol, datos, contraseña o acceso (`motivo` para la auditoría) |
+| GET | `/api/facturacion/facturas/<id>/historial/` | todos (auditoría sólo tesorería) | Pagos, gestiones y cambios de estado o vencimiento |
 | POST | `/api/cobranzas/registrar-cobranza/` | tesorero | `{factura, monto, medio, fecha, referencia}`: pago de una factura; cliente y moneda salen de la factura |
 | GET | `/api/cobranzas/facturas-por-cobrar/?q=` | todos | Buscador por cliente, RUC o número (`001-001-0000123` o `123`) |
 | POST | `/api/cobranzas/cobro-contado/` | tesorero | `{factura, medio, referencia}` → cobra el saldo y deja la factura pagada |
@@ -296,19 +297,33 @@ Pago parcial de esa factura:
 | Crear o editar clientes, facturas y OC | ✔ | ✔ | |
 | Registrar o anular pagos | ✔ | ✔ | |
 | Anular facturas, cambiar vencimientos | ✔ | ✔ | |
-| Consultar la auditoría | ✔ | | |
-| Gestionar usuarios (admin de Django) | ✔ | | |
+| Ver tasas BCP y alertas de tasa | ✔ | ✔ | |
+| Cargar tasas BCP | ✔ | | |
+| Consultar la auditoría completa | ✔ | | |
+| Ver en cada factura quién cambió su estado o vencimiento | ✔ | ✔ | |
+| Crear usuarios, asignar roles, activar/desactivar | ✔ | | |
 
-El rol se asigna en `/admin/` → Usuarios. Un usuario con rol administrador
-obtiene acceso al admin de Django automáticamente.
+Los usuarios y roles se gestionan en la pantalla **Usuarios** (sólo
+administradores). Cada cambio de rol o de acceso queda en la auditoría. Un
+administrador no puede quitarse su propio rol ni desactivarse. Los
+administradores también tienen acceso al panel técnico de Django (`/admin/`).
 
 ### Auditoría
 
-Clientes, órdenes de compra, facturas, pagos y gestiones de cobro registran en la tabla `auditoria` cada
-alta, cambio y baja: usuario, IP, fecha y hora, campos con valor anterior y
-nuevo, y el motivo si se informó. En facturas se auditan estado, vencimiento,
-plazo, importes, OC, datos SIFEN y anulación. La bitácora no se puede editar
-ni borrar (tampoco desde el admin).
+Clientes, órdenes de compra, facturas, pagos, gestiones de cobro, tasas BCP y
+usuarios registran en la tabla `auditoria` cada alta, cambio y baja: usuario,
+IP, fecha y hora, campos con valor anterior y nuevo, y el motivo si se
+informó. La bitácora no se puede editar ni borrar (tampoco desde el admin).
+
+- **Quién cambió un estado de pago:** cada pago registrado o anulado
+  actualiza el saldo y el estado de la factura, y el cambio queda con el
+  usuario y el motivo ("Pago #12", "Anulación del pago #12: cheque rechazado").
+- **Quién cambió un vencimiento:** la prórroga exige un motivo y queda con el
+  usuario, la fecha anterior y la nueva.
+- **Dónde se ve:** en la ficha de cada factura (sección Historial, para
+  tesorería y administración) y en la pantalla **Auditoría** (administradores),
+  filtrable por tipo de registro, campo modificado (estado, vencimiento,
+  anulación de pago, rol…), usuario y fechas.
 
 ### Reglas de negocio implementadas
 
@@ -337,11 +352,11 @@ ni borrar (tampoco desde el admin).
   luego para el reporte de IVA.
 - **Retención de IVA:** `porcentaje_retencion_iva` informado por factura
   (verificar el porcentaje en la resolución vigente de la SET).
-- **SIFEN:** se registran CDC (44 dígitos con dígito verificador), timbrado,
-  establecimiento, punto de expedición, estado del documento, respuesta de la
-  SET y KuDE. Un documento aprobado no se puede modificar ni anular desde el
-  CRM: primero hay que registrar la cancelación ante la SET. La emisión y el
-  envío del XML **no** están implementados (ver nota SIFEN más arriba).
+- **Datos SIFEN de referencia:** al cargar una factura se pueden registrar el
+  CDC (44 dígitos, se valida el dígito verificador), timbrado, numeración y
+  estado del documento. Una factura registrada como aprobada no se puede
+  modificar ni anular en el CRM hasta marcarla como cancelada. El CRM no emite
+  ni envía documentos a la SET.
 
 - **Estados de factura:**
 
@@ -393,6 +408,24 @@ ni borrar (tampoco desde el admin).
   (Ley 1334/98 de Defensa del Consumidor). Las promesas vencidas se marcan como
   cumplidas o incumplidas con el comando diario `evaluar_promesas`.
 
+### Historial de gestiones de cobro por factura
+
+En **Facturas** → elegir una factura:
+
+- **Gestiones de cobro:** llamadas, correos, WhatsApp, visitas, notas y
+  promesas de pago de esa factura, con quién las registró. Desde ahí mismo se
+  registra una gestión nueva: el botón "Usar mensaje sugerido" propone un texto
+  según los días de atraso y "Revisar recomendaciones" muestra las alertas de
+  buenas prácticas antes de guardar.
+- **Revisión de tesorería:** las gestiones con alertas quedan pendientes; el
+  tesorero las aprueba tal cual o con el mensaje final que se comunicará. La
+  pantalla **Gestiones** reúne todas las pendientes y las promesas por evaluar.
+- **Historial:** línea de tiempo con pagos, gestiones y cambios de estado o
+  vencimiento (usuario, fecha y motivo).
+
+API: `GET /api/facturacion/facturas/<id>/historial/` y
+`GET /api/cobranzas/gestiones/?factura=<id>`.
+
 ### Intereses por mora
 
 **Base legal aplicada** (validar con la asesoría legal):
@@ -407,11 +440,40 @@ ni borrar (tampoco desde el admin).
 
 **Tabla `tasas_referencia_bcp`** (`TasaReferenciaBCP`): mes, año, moneda
 (PYG/USD), tasa máxima anual y fuente (resolución o comunicado del BCP). No hay
-tasas fijas en el código: un administrador carga cada mes el valor publicado
-desde `/admin/` o la API. `python manage.py cargar_tasas_ejemplo` carga los
+tasas fijas en el código. `python manage.py cargar_tasas_ejemplo` carga los
 valores de referencia de enero y agosto de 2026 (PYG 27,06% y 27,26%; USD
-11,04% y 11,25%) indicados en la especificación; **verificarlos contra la
-publicación oficial del BCP** antes de usarlos.
+11,04% y 11,25%) indicados en la especificación.
+
+#### Cómo cargar las tasas BCP cada mes
+
+Cuando el BCP publica las tasas máximas del mes (límite de usura), un usuario
+**administrador**:
+
+1. Entra al CRM → **Tasas BCP**.
+2. En "Cargar tasa del mes" elige mes y año, moneda **Guaraníes**, escribe la
+   tasa máxima anual (por ejemplo `27,26`) y en **Fuente** la resolución o
+   comunicado del BCP (y el enlace si lo hay). Guarda.
+3. Repite con moneda **Dólares**.
+4. Revisa en la tabla que el mes tenga las dos tasas (si falta una, dice "falta").
+5. Revisa las **Alertas de tasa**: facturas cuya tasa pactada se ajustó al
+   tope o que se calcularon con la tasa de un mes anterior. El tesorero las
+   marca como revisadas.
+
+Reglas:
+
+- Hay una sola tasa por mes y moneda; para corregir una tasa ya cargada, el
+  administrador la edita desde `/admin/` → Tasas de referencia BCP (el cambio
+  queda en la auditoría).
+- El interés usa la tasa del **mes de vencimiento** de cada factura. Si ese mes
+  no está cargado, usa la última tasa anterior y deja una alerta; si no hay
+  ninguna, no calcula y avisa que falta cargarla.
+- Conviene cargarlas apenas se publican: las facturas que vencen ese mes las necesitan.
+
+También por API (administrador):
+
+```bash
+curl -u admin:CLAVE -X POST http://localhost:8000/api/intereses/tasas-bcp/ -H "Content-Type: application/json" -d '{"anio": 2026, "mes": 12, "moneda": "PYG", "tasa_maxima_anual": "27.30", "fuente": "Resolución BCP N° ..."}'
+```
 
 **`calcular_interes_moratorio(factura, fecha_calculo)`** (`apps/intereses/services.py`):
 
@@ -437,7 +499,36 @@ los pagos se aplican al capital. Cobrar el interés requiere emitir el
 documento correspondiente (nota de débito o factura); definir su tratamiento
 de IVA con el contador.
 
-#### Ejemplo 1 — Factura en guaraníes vencida hace 45 días
+#### Casos de prueba
+
+Los dos casos están automatizados (`apps/intereses/tests/test_interes.py`,
+clase `EjemplosReadmeTest`):
+
+```bash
+docker compose exec -e DJANGO_SETTINGS_MODULE=config.settings.test backend python manage.py test apps.intereses
+```
+
+Para reproducirlos a mano en el CRM:
+
+1. Cargar las tasas de ejemplo:
+
+```bash
+docker compose exec backend python manage.py cargar_tasas_ejemplo
+```
+
+2. En **Clientes**, crear una pyme a crédito (60 días, límite suficiente).
+3. En **Facturas → Cargar factura**, cargar la factura del caso con la fecha de
+   emisión, el plazo, la moneda y la tasa pactada indicados (precios con IVA
+   incluido, un ítem por el total).
+4. Consultar el interés a la fecha de cálculo del caso:
+   `http://localhost:8000/api/intereses/facturas/<id>/?fecha=AAAA-MM-DD`
+   (con la sesión iniciada en el navegador). La respuesta debe coincidir con
+   los resultados de abajo.
+
+#### Caso de prueba 1 — Factura en guaraníes vencida hace 45 días
+
+Factura: emisión 11/07/2026, crédito 30 días, total Gs. 15.000.000, tasa pactada 30%.
+Consulta: `?fecha=2026-09-24`.
 
 | Dato | Valor |
 |---|---|
@@ -453,7 +544,14 @@ de IVA con el contador.
 5. Interés acumulado = 11.202,7397 × 45 = 504.123,29 → **Gs. 504.123**
 6. Total a cobrar = 15.000.000 + 504.123 = **Gs. 15.504.123**
 
-#### Ejemplo 2 — Factura en dólares vencida hace 20 días
+Resultado esperado: `dias_atraso` 45, `tasa_aplicada_anual` 27.26,
+`tasa_ajustada` true, `interes_acumulado` 504123.00, `total` 15504123.00 y
+una alerta de tasa ajustada en **Tasas BCP → Alertas**.
+
+#### Caso de prueba 2 — Factura en dólares vencida hace 20 días
+
+Factura: emisión 21/07/2026, crédito 30 días, total US$ 25.000, tipo de cambio cualquiera, sin tasa pactada (0).
+Consulta: `?fecha=2026-09-09`.
 
 | Dato | Valor |
 |---|---|
@@ -471,14 +569,40 @@ de IVA con el contador.
 5. Interés acumulado = 7,70548 × 20 = 154,1096 → **US$ 154,11**
 6. Total a cobrar = 25.000,00 + 154,11 = **US$ 25.154,11**
 
-Si la tasa BCP de USD de ese mes fuera, por ejemplo, 13,5%, el tope de 1%
-mensual (12%) sería el más bajo y la tasa se ajustaría a 12%. Los tres casos
-están cubiertos por tests en `apps/intereses/tests/test_interes.py`.
+Resultado esperado: `dias_atraso` 20, `tope_usd_anual` 12.00,
+`tasa_aplicada_anual` 11.25, `origen_tasa` "tope_sin_tasa_pactada",
+`interes_acumulado` 154.11, `total` 25154.11.
+
+Variante: si la tasa BCP de USD de ese mes fuera 13,5%, el tope de 1% mensual
+(12%) sería el más bajo y la tasa se ajustaría a 12% (test
+`test_tope_1_por_ciento_mensual_usd`).
+
+### Pantallas
+
+En <http://localhost:5173> (el menú muestra sólo lo que cada rol puede usar):
+
+| Pantalla | Para qué |
+|---|---|
+| Dashboard | Cartera por aging, interés por mora, totales PYG/USD, DSO |
+| Facturas | Buscar y cargar facturas emitidas; ficha con gestiones, historial, prórroga y anulación |
+| Registrar cobranza | Cargar pagos totales o parciales |
+| Gestiones | Gestiones pendientes de revisión, promesas de pago, últimas gestiones |
+| Clientes | Alta y edición de clientes, condiciones de crédito, contacto de cobranza |
+| Reportes | Estado de cuenta, IVA por período, OC pendientes |
+| Tasas BCP | Carga mensual de tasas (administrador) y alertas de tasa |
+| Usuarios | Usuarios y roles (administrador) |
+| Auditoría | Quién cambió qué y cuándo (administrador) |
+
+**Identidad visual:** sigue el Manual de Marca Hierro Metal 2026: negro
+`#1A1A1A`, blanco y amarillo `#FFD100` sólo como acento (filetes, indicadores
+de selección; nunca como color de texto corrido), Barlow Condensed en títulos
+y Barlow en textos, y el logo en su versión "placa" (sobre placa blanca) en
+la barra negra, a 96 px de ancho (mínimo de marca: 90 px). El logo está en
+`frontend/public/marca/`.
 
 ### Dashboard y reportes
 
-Pantallas en <http://localhost:5173>: **Dashboard**, **Registrar cobranza** y
-**Reportes**. Todos los roles pueden verlas. Cada vista y reporte se puede
+Todos los roles pueden ver el dashboard y los reportes. Cada vista y reporte se puede
 descargar en CSV (separador `;`, abre directo en Excel).
 
 **Dashboard de cartera** (`#dashboard`):
@@ -518,6 +642,7 @@ Ejecutar una vez por día (cron o el programador del servidor):
 python manage.py actualizar_vencidas && python manage.py evaluar_promesas
 ```
 
-## Próximas etapas
+## Próximos pasos
 
-Ver [`docs/arquitectura.md`](docs/arquitectura.md#plan-de-etapas).
+Instalación en la computadora de la empresa con Docker (sección "Levantar el
+proyecto"). Ver [`docs/arquitectura.md`](docs/arquitectura.md#plan-de-etapas).
