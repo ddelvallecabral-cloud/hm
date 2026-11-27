@@ -1,7 +1,7 @@
 """Configuración común a todos los entornos."""
 from pathlib import Path
 
-from config.env import cargar_dotenv, env, env_int, env_list
+from config.env import cargar_dotenv, env, env_bool, env_int, env_list
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 cargar_dotenv(BASE_DIR / ".env")
@@ -37,6 +37,7 @@ MIDDLEWARE = [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    "apps.core.audit.AuditoriaMiddleware",  # usuario/IP para la bitácora
 ]
 
 ROOT_URLCONF = "config.urls"
@@ -101,6 +102,8 @@ CSRF_TRUSTED_ORIGINS = env_list("CSRF_TRUSTED_ORIGINS", "http://localhost:5173")
 CRM = {
     "MONEDAS": ["PYG", "USD"],
     "MONEDA_BASE": env("CRM_MONEDA_BASE", "PYG"),
+    # Orden de compra: opcional para profesionales/pymes salvo que se active aquí.
+    "EXIGIR_OC": env_bool("CRM_EXIGIR_OC", False),
     # SIFEN - Facturación electrónica (SET). Integración real pendiente.
     "SIFEN_AMBIENTE": env("SIFEN_AMBIENTE", "test"),  # test | prod
     "SIFEN_URL_WS": env("SIFEN_URL_WS", ""),
