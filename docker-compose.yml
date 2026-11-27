@@ -7,7 +7,8 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-tesoreria}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tesoreria}
       TZ: America/Asuncion
-    ports: ["5432:5432"]
+    # Sólo accesible desde esta computadora, en el puerto 5433 (evita choque con un PostgreSQL ya instalado).
+    ports: ["127.0.0.1:${DB_PUERTO_LOCAL:-5433}:5432"]
     volumes: [pgdata:/var/lib/postgresql/data]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-tesoreria}"]
@@ -16,7 +17,7 @@ services:
 
   backend:
     build: { context: ./backend, args: { REQUIREMENTS: dev } }
-    command: sh -c "python manage.py migrate && python manage.py runserver 0.0.0.0:8000"
+    command: sh ./docker-entrypoint-dev.sh
     env_file: [./backend/.env]
     environment:
       DJANGO_SETTINGS_MODULE: config.settings.dev
@@ -30,7 +31,7 @@ services:
     working_dir: /app
     command: sh -c "npm install && npm run dev -- --host"
     environment: { VITE_PROXY_TARGET: "http://backend:8000" }
-    volumes: ["./frontend:/app"]
+    volumes: ["./frontend:/app", "/app/node_modules"]
     ports: ["5173:5173"]
     depends_on: [backend]
 

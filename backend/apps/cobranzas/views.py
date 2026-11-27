@@ -12,9 +12,12 @@ from apps.core.views import montos_a_texto
 
 from . import services
 from .models import GestionCobro, Pago
+from apps.facturacion.models import Factura
+
+from .recomendaciones import BUENAS_PRACTICAS, recomendacion_para
 from .serializers import (
     CobroContadoSerializer, GestionActualizacionSerializer, GestionCobroSerializer, ImputacionSerializer,
-    PagoSerializer, a_drf,
+    PagoSerializer, RegistrarCobranzaSerializer, RevisionGestionSerializer, a_drf,
 )
 
 
@@ -81,6 +84,41 @@ def cobro_contado(request):
     return Response(PagoSerializer(pago).data, status=status.HTTP_201_CREATED)
 
 
+@api_view(["POST"])
+@permission_classes([LecturaTodosEscrituraTesorero])
+def registrar_cobranza(request):
+    """Pago de una factura: {"factura": 12, "monto": "4000000", "medio": "transferencia", "referencia": "…"}."""
+    ser = RegistrarCobranzaSerializer(data=request.data)
+    ser.is_valid(raise_exception=True)
+    datos = dict(ser.validated_data)
+    try:
+        pago = services.registrar_cobranza(datos.pop("factura"), datos.pop("monto"), datos.pop("medio"),
+                                           fecha=datos.pop("fecha", None), usuario=request.user, **datos)
+    except DjangoValidationError as e:
+        raise a_drf(e)
+    factura = pago.aplicaciones.get().factura
+    return Response({"pago": PagoSerializer(pago).data, "factura": _factura_resumen(factura)},
+                    status=status.HTTP_201_CREATED)
+
+
+def _factura_resumen(f: Factura) -> dict:
+    return montos_a_texto({
+        "id": f.pk, "numero": f.numero_completo, "cliente_id": f.cliente_id, "cliente": f.cliente.razon_social,
+        "ruc": f.cliente.ruc, "fecha_emision": f.fecha_emision, "fecha_vencimiento": f.fecha_vencimiento,
+        "condicion": f.condicion, "moneda": f.moneda, "total": f.total, "saldo": f.calcular_saldo_pendiente(),
+        "cobrado": f.total - f.calcular_saldo_pendiente(), "estado": f.estado, "estado_display": f.get_estado_display(),
+    })
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def facturas_por_cobrar(request):
+    """Buscador para "Registrar cobranza": ?q=<cliente, RUC o número> &cliente= &moneda="""
+    p = request.query_params
+    facturas = services.buscar_facturas_por_cobrar(p.get("q", ""), p.get("cliente"), p.get("moneda"))
+    return Response([_factura_resumen(f) for f in facturas])
+
+
 # ------------------------------ Gestiones ------------------------------- #
 class GestionListCreateView(generics.ListCreateAPIView):
     """Todos los roles registran gestiones. GET ?cliente= &tipo= &resultado= &factura="""
@@ -94,6 +132,8 @@ class GestionListCreateView(generics.ListCreateAPIView):
                       p, ("cliente", "tipo", "resultado"))
         if p.get("factura"):
             qs = qs.filter(facturas=p["factura"])
+        if p.get("revision"):
+            qs = qs.filter(revision=p["revision"])
         if p.get("promesas_pendientes"):
             qs = qs.filter(resultado=GestionCobro.Resultado.PROMESA_PAGO, promesa_cumplida__isnull=True)
         return qs
@@ -117,6 +157,41 @@ class GestionDetailView(generics.RetrieveUpdateAPIView):
         if self.request.method != "GET" and not u.es_tesorero:
             qs = qs.filter(Q(cobrador=u))
         return qs
+
+
+@api_view(["POST"])
+@permission_classes([LecturaTodosEscrituraTesorero])
+def revisar_gestion(request, pk):
+    """Tesorería decide: {"decision": "aprobada"} o {"decision": "modificada", "mensaje_final": "…"}."""
+    g = get_object_or_404(GestionCobro, pk=pk)
+    ser = RevisionGestionSerializer(data=request.data)
+    ser.is_valid(raise_exception=True)
+    d = ser.validated_data
+    try:
+        g = services.revisar_gestion(g, request.user, d["decision"], d["mensaje_final"], d["comentario"])
+    except DjangoValidationError as e:
+        raise a_drf(e)
+    return Response(GestionCobroSerializer(g).data)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def verificar_gestion(request):
+    """Muestra las alertas que tendría una gestión, sin guardarla (para revisar el mensaje antes de enviarlo)."""
+    ser = GestionCobroSerializer(data=request.data)
+    ser.is_valid(raise_exception=True)
+    datos = {k: v for k, v in ser.validated_data.items() if k != "facturas"}
+    return Response({"alertas": GestionCobro(**datos).evaluar_alertas()})
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def recomendaciones(request):
+    """?factura=<id> → tono, canal y mensaje sugerido según los días de atraso."""
+    if request.query_params.get("factura"):
+        f = get_object_or_404(Factura.objects.select_related("cliente"), pk=request.query_params["factura"])
+        return Response(recomendacion_para(f))
+    return Response({"buenas_practicas": BUENAS_PRACTICAS})
 
 
 # --------------------------- Consultas ---------------------------------- #

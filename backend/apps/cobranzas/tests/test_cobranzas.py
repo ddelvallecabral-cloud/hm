@@ -147,12 +147,13 @@ class PagosParcialesTest(Base):
         f.refresh_from_db()
         self.assertEqual((f.estado, f.saldo), ("pendiente", Decimal(2_000_000)))
 
-    def test_pago_parcial_en_factura_vencida_sigue_vencida(self):
+    def test_pago_parcial_en_factura_vencida(self):
         f = self.factura(self.pyme, 2_000_000, "credito", 30, emision=HOY - timedelta(days=40))
         self.assertEqual(f.estado, "vencida")
         self.pago(500_000, imputaciones=[{"factura": f.pk, "monto": "500000"}])
         f.refresh_from_db()
-        self.assertEqual((f.estado, f.monto_cobrado), ("vencida", Decimal(500_000)))
+        self.assertEqual((f.estado, f.monto_cobrado), ("vencida_pago_parcial", Decimal(500_000)))
+        self.assertEqual(f.get_estado_display(), "Vencida y en proceso de pago parcial")
 
     def test_alertas(self):
         self.factura(self.pyme, 1_000_000, "credito", 30, emision=HOY - timedelta(days=27))  # vence en 3 días
@@ -160,6 +161,70 @@ class PagosParcialesTest(Base):
         r = self.api_cob.get(f"{P}alertas/").json()
         self.assertEqual(len(r["proximas_a_vencer"]), 1)
         self.assertEqual(r["vencidas"][0]["dias_atraso"], 5)
+
+
+class RegistrarCobranzaTest(Base):
+    URL = f"{P}registrar-cobranza/"
+
+    def test_pago_parcial_y_total(self):
+        f = self.factura(self.pyme, 10_000_000, "credito", 30)
+        r = self.api.post(self.URL, {"factura": f.pk, "monto": "4000000", "medio": "efectivo"}, format="json")
+        self.assertEqual(r.status_code, 201, r.content)
+        self.assertEqual((r.json()["factura"]["estado"], r.json()["factura"]["saldo"]), ("pagada_parcial", "6000000.00"))
+        self.assertEqual(r.json()["pago"]["moneda"], "PYG")
+        r = self.api.post(self.URL, {"factura": f.pk, "monto": "6000000", "medio": "cheque", "referencia": "CH 0012"},
+                          format="json")
+        self.assertEqual((r.json()["factura"]["estado"], r.json()["factura"]["saldo"]), ("pagada", "0.00"))
+
+    def test_monto_mayor_al_saldo(self):
+        f = self.factura(self.particular, 1_000_000)
+        r = self.api.post(self.URL, {"factura": f.pk, "monto": "1000001", "medio": "efectivo"}, format="json")
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("monto", r.json())
+
+    def test_moneda_distinta(self):
+        f = self.factura(self.pyme, 1_000, "credito", 30, moneda="USD")
+        r = self.api.post(self.URL, {"factura": f.pk, "monto": "100", "medio": "efectivo", "moneda": "PYG"},
+                          format="json")
+        self.assertEqual(r.status_code, 400)
+
+    def test_cobrador_no_registra(self):
+        f = self.factura(self.particular, 1_000_000)
+        r = self.api_cob.post(self.URL, {"factura": f.pk, "monto": "1", "medio": "efectivo"}, format="json")
+        self.assertEqual(r.status_code, 403)
+
+    def test_saldo_pendiente_calculado_desde_pagos(self):
+        from apps.cobranzas.services import saldo_pendiente
+        f = self.factura(self.pyme, 9_000_000, "credito", 30)
+        self.api.post(self.URL, {"factura": f.pk, "monto": "2000000", "medio": "efectivo",
+                                 "fecha": (HOY + timedelta(days=1)).isoformat()}, format="json")
+        f.refresh_from_db()
+        self.assertEqual(saldo_pendiente(f), Decimal(7_000_000))
+        self.assertEqual(saldo_pendiente(f, al=HOY), Decimal(9_000_000))  # saldo a una fecha anterior al pago
+
+    def test_buscar_por_cliente_ruc_y_numero(self):
+        f = self.factura(self.pyme, 1_000_000, "credito", 30)
+        self.factura(self.particular, 1_000_000)
+        buscar = lambda q: [x["numero"] for x in self.api_cob.get(f"{P}facturas-por-cobrar/", {"q": q}).json()]
+        self.assertEqual(buscar("ñandutí"), [f.numero_completo])
+        self.assertEqual(buscar("80012345"), [f.numero_completo])
+        self.assertEqual(buscar(f.numero_completo), [f.numero_completo])
+        self.assertEqual(buscar(str(int(f.numero))), [f.numero_completo])
+        self.assertEqual(len(buscar("")), 2)
+
+
+class SesionTest(TestCase):
+    def test_login_csrf_y_me(self):
+        get_user_model().objects.create_user("ana", password="clave-segura-123", rol="tesorero")
+        c = APIClient(enforce_csrf_checks=True)
+        c.get("/api/core/csrf/")
+        token = c.cookies["csrftoken"].value
+        self.assertEqual(c.post("/api/core/login/", {"username": "ana", "password": "mal"}, format="json",
+                                HTTP_X_CSRFTOKEN=token).status_code, 400)
+        r = c.post("/api/core/login/", {"username": "ana", "password": "clave-segura-123"}, format="json",
+                   HTTP_X_CSRFTOKEN=token)
+        self.assertEqual(r.json()["rol"], "tesorero")
+        self.assertEqual(c.get("/api/core/me/").json()["username"], "ana")
 
 
 class GestionesTest(Base):
@@ -178,36 +243,77 @@ class GestionesTest(Base):
     def test_promesa_sin_fecha(self):
         self.assertEqual(self.gestion(resultado="promesa_pago").status_code, 400)
 
-    def test_mensaje_intimidatorio_rechazado(self):
+    def alertas(self, r):
+        self.assertEqual(r.status_code, 201, r.content)
+        return {a["codigo"] for a in r.json()["alertas"]}
+
+    def test_mensaje_sensible_genera_alerta_y_no_bloquea(self):
         r = self.gestion(mensaje="Si no paga hoy le vamos a embargar y avisaremos a su empleador")
-        self.assertEqual(r.status_code, 400)
-        self.assertIn("mensaje", r.json())
+        self.assertEqual(self.alertas(r), {"expresiones"})
+        self.assertEqual(r.json()["revision"], "pendiente")
 
-    def test_fuera_de_horario(self):
-        self.assertEqual(self.gestion(fecha_hora=proximo(1, time(21, 30)).isoformat()).status_code, 400)
-        self.assertEqual(self.gestion(fecha_hora=proximo(5, time(15, 0)).isoformat()).status_code, 400)  # sábado tarde
-        self.assertEqual(self.gestion(fecha_hora=proximo(6).isoformat()).status_code, 400)  # domingo
+    def test_gestion_correcta_sin_alertas(self):
+        r = self.gestion(mensaje="Le recordamos el vencimiento de su factura.")
+        self.assertEqual(self.alertas(r), set())
+        self.assertEqual(r.json()["revision"], "no_requiere")
 
-    def test_nota_interna_sin_restriccion_horaria(self):
-        self.assertEqual(self.gestion(tipo="nota_interna", fecha_hora=proximo(6, time(22, 0)).isoformat())
-                         .status_code, 201)
+    def test_fuera_de_horario_alerta(self):
+        self.assertEqual(self.alertas(self.gestion(fecha_hora=proximo(1, time(21, 30)).isoformat())), {"horario"})
+        self.assertEqual(self.alertas(self.gestion(fecha_hora=proximo(5, time(15, 0)).isoformat())), {"horario"})
+        self.assertEqual(self.alertas(self.gestion(fecha_hora=proximo(6).isoformat())), {"dia"})
 
-    def test_feriado(self):
+    def test_nota_interna_sin_alertas_de_horario(self):
+        r = self.gestion(tipo="nota_interna", fecha_hora=proximo(6, time(22, 0)).isoformat())
+        self.assertEqual(self.alertas(r), set())
+
+    def test_feriado_alerta(self):
         Feriado.objects.create(fecha=proximo(1).date(), descripcion="Feriado de prueba")
-        self.assertEqual(self.gestion().status_code, 400)
+        self.assertEqual(self.alertas(self.gestion()), {"dia"})
 
-    def test_maximo_contactos_semanales(self):
+    def test_frecuencia_alerta(self):
         base = proximo(0)
         for i in range(3):
-            self.assertEqual(self.gestion(fecha_hora=(base + timedelta(hours=i)).isoformat()).status_code, 201)
-        r = self.gestion(fecha_hora=(base + timedelta(days=1)).isoformat())
-        self.assertEqual(r.status_code, 400)
-        self.assertIn("7 días", str(r.json()))
+            self.assertEqual(self.alertas(self.gestion(fecha_hora=(base + timedelta(hours=i)).isoformat())), set())
+        self.assertEqual(self.alertas(self.gestion(fecha_hora=(base + timedelta(days=1)).isoformat())), {"frecuencia"})
 
-    def test_whatsapp_requiere_consentimiento(self):
-        r = self.gestion(cliente=self.particular.pk, tipo="whatsapp")
-        self.assertEqual(r.status_code, 400)
-        self.assertEqual(self.gestion(tipo="whatsapp").status_code, 201)
+    def test_whatsapp_sin_consentimiento_alerta(self):
+        self.assertEqual(self.alertas(self.gestion(cliente=self.particular.pk, tipo="whatsapp")), {"whatsapp"})
+        self.assertEqual(self.alertas(self.gestion(tipo="whatsapp")), set())
+
+    def test_tesoreria_revisa_y_decide_el_mensaje(self):
+        gid = self.gestion(mensaje="Último aviso antes de iniciar acciones").json()["id"]
+        url = f"{P}gestiones/{gid}/revisar/"
+        self.assertEqual(self.api_cob.post(url, {"decision": "aprobada"}, format="json").status_code, 403)
+        self.assertEqual(self.api.post(url, {"decision": "modificada"}, format="json").status_code, 400)
+        r = self.api.post(url, {"decision": "modificada", "comentario": "Tono más cordial",
+                                "mensaje_final": "Le escribimos por la factura pendiente; ¿coordinamos el pago?"},
+                          format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+        d = r.json()
+        self.assertEqual((d["revision"], d["revisada_por_nombre"]), ("modificada", "tes"))
+        self.assertTrue(d["mensaje_final"].startswith("Le escribimos"))
+        self.assertTrue(AuditLog.objects.filter(modelo="cobranzas.GestionCobro", objeto_id=str(gid),
+                                                motivo__startswith="Revisión").exists())
+        self.assertEqual(len(self.api.get(f"{P}gestiones/", {"revision": "pendiente"}).json()["results"]), 0)
+
+    def test_verificar_sin_guardar(self):
+        r = self.api_cob.post(f"{P}gestiones/verificar/", {"cliente": self.pyme.pk, "tipo": "llamada",
+                                                            "fecha_hora": proximo(6).isoformat(),
+                                                            "mensaje": "lo vamos a denunciar a la policía"},
+                              format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual({a["codigo"] for a in r.json()["alertas"]}, {"dia", "expresiones"})
+        self.assertEqual(GestionCobro.objects.count(), 0)
+
+    def test_recomendacion_por_tramo(self):
+        f = self.factura(self.pyme, 3_300_000, "credito", 30, emision=HOY - timedelta(days=50))  # 20 días de atraso
+        r = self.api_cob.get(f"{P}recomendaciones/", {"factura": f.pk}).json()
+        self.assertEqual((r["tramo"], r["dias_atraso"]), ("atraso_moderado", 20))
+        self.assertIn("3.300.000", r["mensaje_sugerido"])
+        self.assertIn(f.numero_completo, r["mensaje_sugerido"])
+        # La recomendación misma no dispara alertas.
+        g = self.gestion(mensaje=r["mensaje_sugerido"])
+        self.assertEqual(self.alertas(g), set())
 
     def test_factura_de_otro_cliente(self):
         f = self.factura(self.particular, 1_000_000)

@@ -93,10 +93,12 @@ class AplicacionPago(models.Model):
 
 
 class ParametrosCobranza(AuditableModel):
-    """Límites para una cobranza extrajudicial no intimidatoria (registro único).
+    """Criterios de buenas prácticas de cobranza extrajudicial (registro único).
 
-    Valores por defecto prudentes; revisarlos con la asesoría legal de la empresa
-    (Ley 1334/98 de Defensa del Consumidor y normativa complementaria).
+    NO bloquean ninguna gestión: si una gestión se sale de estos criterios, el
+    sistema genera alertas y la deja pendiente de revisión por tesorería, que
+    decide qué se comunica finalmente al cliente. Valores por defecto prudentes;
+    revisarlos con la asesoría legal (Ley 1334/98 de Defensa del Consumidor).
     """
 
     hora_inicio = models.TimeField(default=time(8, 0))
@@ -106,7 +108,7 @@ class ParametrosCobranza(AuditableModel):
     permitir_domingos_feriados = models.BooleanField(default=False)
     max_contactos_semana = models.PositiveSmallIntegerField(
         default=3, validators=[MinValueValidator(1), MaxValueValidator(14)],
-        help_text="Máximo de contactos con el mismo cliente en 7 días corridos.")
+        help_text="A partir de este número de contactos en 7 días corridos se genera una alerta.")
     dias_aviso_vencimiento = models.PositiveSmallIntegerField(
         default=5, help_text="Con cuántos días de anticipación se alerta un vencimiento próximo.")
     actualizado_en = models.DateTimeField(auto_now=True)
@@ -140,12 +142,14 @@ class Feriado(models.Model):
 class GestionCobro(AuditableModel):
     """Registro de cada acción de cobro: llamadas, correos, mensajes, visitas, promesas de pago.
 
-    Validaciones de cobranza no intimidatoria:
-      * sólo en el horario y días permitidos (no domingos ni feriados por defecto);
-      * frecuencia máxima de contactos por semana con el mismo cliente;
-      * sólo con el titular o un contacto autorizado (nunca terceros: familia, empleador, vecinos);
-      * WhatsApp/SMS sólo con consentimiento del cliente;
-      * el mensaje no puede contener amenazas, falsedades sobre consecuencias legales ni insultos.
+    Enfoque NO restrictivo: el sistema nunca impide registrar una gestión. Evalúa
+    buenas prácticas de cobranza no intimidatoria y, si encuentra algo para
+    revisar, guarda `alertas` y deja la gestión "pendiente de revisión" para que
+    tesorería decida (aprobar tal cual o modificar el mensaje final):
+      * horario y días recomendados (sin domingos ni feriados);
+      * frecuencia de contactos con el mismo cliente;
+      * contacto por WhatsApp/SMS sin consentimiento registrado;
+      * expresiones que pueden resultar intimidatorias o involucrar a terceros.
     """
 
     class Tipo(models.TextChoices):
@@ -168,12 +172,18 @@ class GestionCobro(AuditableModel):
         TITULAR = "titular", "Titular o representante del cliente"
         CONTACTO_AUTORIZADO = "contacto_autorizado", "Contacto de cobranza autorizado"
 
-    # Lista mínima; ampliarla con la asesoría legal.
-    EXPRESIONES_PROHIBIDAS = (
+    class Revision(models.TextChoices):
+        NO_REQUIERE = "no_requiere", "Sin observaciones"
+        PENDIENTE = "pendiente", "Pendiente de revisión por tesorería"
+        APROBADA = "aprobada", "Aprobada por tesorería"
+        MODIFICADA = "modificada", "Mensaje modificado por tesorería"
+
+    # Expresiones que generan alerta (no bloquean). Ampliar con la asesoría legal.
+    EXPRESIONES_SENSIBLES = (
         "cárcel", "carcel", "preso", "presa", "prisión", "prision", "denuncia penal", "policía", "policia",
         "embargo inmediato", "vamos a embargar", "le embargaremos", "escrache", "publicaremos su deuda",
         "avisaremos a su empleador", "su empleador", "su familia", "sus vecinos", "ladrón", "ladron",
-        "estafador", "sinvergüenza", "sinverguenza", "delincuente", "inútil", "inutil",
+        "estafador", "sinvergüenza", "sinverguenza", "delincuente", "inútil", "inutil", "último aviso", "ultimo aviso",
     )
 
     cliente = models.ForeignKey(Cliente, on_delete=models.PROTECT, related_name="gestiones")
@@ -182,17 +192,25 @@ class GestionCobro(AuditableModel):
     fecha_hora = models.DateTimeField(default=timezone.now)
     destinatario = models.CharField(max_length=20, choices=Destinatario.choices, default=Destinatario.TITULAR)
     resultado = models.CharField(max_length=15, choices=Resultado.choices, blank=True)
-    mensaje = models.TextField(blank=True, help_text="Texto enviado o resumen de la conversación.")
+    mensaje = models.TextField(blank=True, help_text="Texto propuesto/enviado o resumen de la conversación.")
     promesa_fecha = models.DateField(null=True, blank=True)
     promesa_monto = models.DecimalField(max_digits=18, decimal_places=2, null=True, blank=True,
                                         validators=[MinValueValidator(Decimal("0.01"))])
     promesa_cumplida = models.BooleanField(null=True, blank=True, help_text="Vacío = aún no evaluada.")
     proxima_accion = models.DateField(null=True, blank=True)
     cobrador = models.ForeignKey("core.Usuario", null=True, blank=True, on_delete=models.SET_NULL, related_name="gestiones")
+
+    # Alertas y decisión de tesorería
+    alertas = models.JSONField(default=list, blank=True)
+    revision = models.CharField(max_length=12, choices=Revision.choices, default=Revision.NO_REQUIERE)
+    mensaje_final = models.TextField(blank=True, help_text="Texto que tesorería decidió comunicar al cliente.")
+    comentario_revision = models.CharField(max_length=255, blank=True)
+    revisada_por = models.ForeignKey("core.Usuario", null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
+    revisada_en = models.DateTimeField(null=True, blank=True)
     creado_en = models.DateTimeField(auto_now_add=True)
 
     CAMPOS_AUDITADOS = ("tipo", "fecha_hora", "resultado", "mensaje", "promesa_fecha", "promesa_monto",
-                        "promesa_cumplida", "proxima_accion")
+                        "promesa_cumplida", "proxima_accion", "revision", "mensaje_final", "comentario_revision")
 
     class Meta:
         db_table = "gestiones_cobro"
@@ -205,47 +223,63 @@ class GestionCobro(AuditableModel):
     def es_contacto(self) -> bool:
         return self.tipo != self.Tipo.NOTA_INTERNA
 
-    def clean(self):
-        errores = {}
+    # ------------------------------------------------------------------ #
+    def evaluar_alertas(self) -> list[dict]:
+        """Devuelve alertas de buenas prácticas. Nunca lanza errores."""
+        alertas = []
+
+        def alerta(codigo, texto, sugerencia):
+            alertas.append({"codigo": codigo, "mensaje": texto, "sugerencia": sugerencia})
+
         texto = (self.mensaje or "").lower()
-        prohibidas = sorted({e for e in self.EXPRESIONES_PROHIBIDAS if e in texto})
-        if prohibidas:
-            errores["mensaje"] = ("El mensaje contiene expresiones intimidatorias o que involucran a terceros, "
-                                  "no permitidas en la cobranza extrajudicial: " + ", ".join(prohibidas))
+        sensibles = sorted({e for e in self.EXPRESIONES_SENSIBLES if e in texto})
+        if sensibles:
+            alerta("expresiones", "El mensaje contiene expresiones que pueden resultar intimidatorias o involucrar "
+                                  "a terceros: " + ", ".join(sensibles) + ".",
+                   "Informe el atraso con datos concretos (factura, monto, vencimiento) y ofrezca opciones de pago. "
+                   "Use la recomendación sugerida para el tramo de atraso.")
+        if self.cliente_id and self.tipo == self.Tipo.WHATSAPP and not self.cliente.acepta_whatsapp:
+            alerta("whatsapp", "El cliente no tiene registrado consentimiento para WhatsApp/SMS.",
+                   "Prefiera correo o llamada, o registre el consentimiento en la ficha del cliente.")
+        if self.cliente_id and self.es_contacto and self.fecha_hora:
+            p = ParametrosCobranza.get()
+            local = timezone.localtime(self.fecha_hora)
+            hora, dia = local.time(), local.weekday()
+            feriado = Feriado.objects.filter(fecha=local.date()).exists()
+            horario = f"{p.hora_inicio:%H:%M} a {p.hora_fin:%H:%M} (sábados hasta {p.hora_fin_sabado:%H:%M})"
+            if (dia == 6 or feriado) and not p.permitir_domingos_feriados:
+                alerta("dia", "Contacto en domingo o feriado.", f"Se recomienda contactar en días hábiles, {horario}.")
+            elif dia == 5 and (not p.permitir_sabados or not p.hora_inicio <= hora <= p.hora_fin_sabado):
+                alerta("horario", "Contacto fuera del horario recomendado para sábados.", f"Horario sugerido: {horario}.")
+            elif dia < 5 and not p.hora_inicio <= hora <= p.hora_fin:
+                alerta("horario", "Contacto fuera del horario recomendado.", f"Horario sugerido: {horario}.")
+            recientes = (GestionCobro.objects.filter(cliente_id=self.cliente_id,
+                                                     fecha_hora__gt=self.fecha_hora - timedelta(days=7),
+                                                     fecha_hora__lte=self.fecha_hora)
+                         .exclude(tipo=self.Tipo.NOTA_INTERNA).exclude(pk=self.pk).count())
+            if recientes >= p.max_contactos_semana:
+                alerta("frecuencia", f"Ya hubo {recientes} contactos con este cliente en los últimos 7 días.",
+                       "Espaciar los contactos evita que se perciba como hostigamiento; "
+                       "considere una nota interna y retomar en unos días.")
+        return alertas
+
+    def clean(self):
+        # Sólo integridad de datos: las buenas prácticas generan alertas, no errores.
+        errores = {}
         if self.resultado == self.Resultado.PROMESA_PAGO and not (self.promesa_fecha and self.promesa_monto):
             errores["promesa_fecha"] = "Una promesa de pago requiere fecha y monto."
         if self.promesa_fecha and self.fecha_hora and self.promesa_fecha < timezone.localtime(self.fecha_hora).date():
             errores["promesa_fecha"] = "La fecha prometida no puede ser anterior a la gestión."
-        if self.cliente_id and self.tipo == self.Tipo.WHATSAPP and not self.cliente.acepta_whatsapp:
-            errores["tipo"] = "El cliente no autorizó contacto por WhatsApp/SMS."
-        if self.cliente_id and self.es_contacto and self._state.adding:
-            errores.update(self._validar_horario_y_frecuencia())
+        if self.revision in (self.Revision.APROBADA, self.Revision.MODIFICADA) and not self.revisada_por_id:
+            errores["revision"] = "La revisión debe registrar quién la hizo."
+        if self.revision == self.Revision.MODIFICADA and not self.mensaje_final:
+            errores["mensaje_final"] = "Indique el mensaje final que se comunicará."
         if errores:
             raise ValidationError(errores)
 
-    def _validar_horario_y_frecuencia(self) -> dict:
-        p = ParametrosCobranza.get()
-        local = timezone.localtime(self.fecha_hora)
-        hora, dia = local.time(), local.weekday()  # 0 = lunes
-        feriado = Feriado.objects.filter(fecha=local.date()).exists()
-        if (dia == 6 or feriado) and not p.permitir_domingos_feriados:
-            return {"fecha_hora": "No se realizan gestiones de cobro en domingos ni feriados."}
-        if dia == 5:
-            if not p.permitir_sabados:
-                return {"fecha_hora": "No se realizan gestiones de cobro los sábados."}
-            if not p.hora_inicio <= hora <= p.hora_fin_sabado:
-                return {"fecha_hora": f"Los sábados sólo de {p.hora_inicio:%H:%M} a {p.hora_fin_sabado:%H:%M}."}
-        elif dia < 5 and not p.hora_inicio <= hora <= p.hora_fin:
-            return {"fecha_hora": f"Horario de contacto permitido: {p.hora_inicio:%H:%M} a {p.hora_fin:%H:%M}."}
-        recientes = (GestionCobro.objects.filter(cliente_id=self.cliente_id,
-                                                 fecha_hora__gt=self.fecha_hora - timedelta(days=7),
-                                                 fecha_hora__lte=self.fecha_hora)
-                     .exclude(tipo=self.Tipo.NOTA_INTERNA).count())
-        if recientes >= p.max_contactos_semana:
-            return {"fecha_hora": f"Ya hubo {recientes} contactos con este cliente en los últimos 7 días "
-                                  f"(máximo {p.max_contactos_semana}). Registre una nota interna o espere."}
-        return {}
-
     def save(self, *args, **kwargs):
         self.full_clean()
+        if self._state.adding:
+            self.alertas = self.evaluar_alertas()
+            self.revision = self.Revision.PENDIENTE if self.alertas else self.Revision.NO_REQUIERE
         super().save(*args, **kwargs)

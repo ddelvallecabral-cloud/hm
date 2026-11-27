@@ -1,4 +1,5 @@
-"""Marca como "vencidas" las facturas con saldo cuyo vencimiento ya pasó.
+"""Marca como "vencida" (o "vencida y en proceso de pago parcial") las facturas
+con saldo cuyo vencimiento ya pasó.
 
 Programar una vez por día (p. ej. cron 00:05, hora de Asunción):
     python manage.py actualizar_vencidas

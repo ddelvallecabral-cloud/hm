@@ -161,6 +161,8 @@ class EstadosTest(FacturaApiBase):
         f = Factura.objects.get(pk=self.factura(self.pyme, condicion="credito", plazo_dias=30).json()["id"])
         f.saldo = Decimal(5_000_000)
         self.assertEqual(f.actualizar_estado(HOY + timedelta(days=1)), "pagada_parcial")
+        self.assertEqual(f.actualizar_estado(HOY + timedelta(days=40)), "vencida_pago_parcial")
+        f.saldo = f.total
         self.assertEqual(f.actualizar_estado(HOY + timedelta(days=40)), "vencida")
         f.saldo = 0
         self.assertEqual(f.actualizar_estado(HOY + timedelta(days=40)), "pagada")

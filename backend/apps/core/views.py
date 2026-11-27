@@ -57,3 +57,34 @@ def montos_a_texto(obj):
     if isinstance(obj, (list, tuple)):
         return [montos_a_texto(v) for v in obj]
     return obj
+
+
+# ------------------------- Sesión para el frontend ------------------------- #
+from django.contrib.auth import authenticate, login, logout  # noqa: E402
+from django.views.decorators.csrf import ensure_csrf_cookie  # noqa: E402
+from rest_framework import status as http  # noqa: E402
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+@ensure_csrf_cookie
+def csrf(request):
+    """Entrega la cookie csrftoken; el frontend la reenvía en el header X-CSRFToken."""
+    return Response({"ok": True})
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def iniciar_sesion(request):
+    u = authenticate(request, username=request.data.get("username", ""), password=request.data.get("password", ""))
+    if u is None or not u.is_active:
+        return Response({"detail": "Usuario o contraseña incorrectos."}, status=http.HTTP_400_BAD_REQUEST)
+    login(request, u)
+    return Response(UsuarioActualSerializer(u).data)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def cerrar_sesion(request):
+    logout(request)
+    return Response({"ok": True})

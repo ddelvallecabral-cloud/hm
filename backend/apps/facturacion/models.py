@@ -89,9 +89,11 @@ class Factura(AuditableModel):
         PAGADA_PARCIAL = "pagada_parcial", "Pagada parcialmente"
         PAGADA = "pagada", "Pagada"
         VENCIDA = "vencida", "Vencida"
+        VENCIDA_PAGO_PARCIAL = "vencida_pago_parcial", "Vencida y en proceso de pago parcial"
         ANULADA = "anulada", "Anulada"
 
-    ESTADOS_ABIERTOS = (Estado.PENDIENTE, Estado.PAGADA_PARCIAL, Estado.VENCIDA)
+    ESTADOS_ABIERTOS = (Estado.PENDIENTE, Estado.PAGADA_PARCIAL, Estado.VENCIDA, Estado.VENCIDA_PAGO_PARCIAL)
+    ESTADOS_VENCIDOS = (Estado.VENCIDA, Estado.VENCIDA_PAGO_PARCIAL)
 
     class EstadoSifen(models.TextChoices):
         BORRADOR = "borrador", "Borrador (no enviado)"
@@ -151,7 +153,7 @@ class Factura(AuditableModel):
     retencion_iva = _monto()
     saldo = _monto(help_text="Saldo pendiente de cobro.")
 
-    estado = models.CharField(max_length=15, choices=Estado.choices, default=Estado.PENDIENTE, db_index=True)
+    estado = models.CharField(max_length=22, choices=Estado.choices, default=Estado.PENDIENTE, db_index=True)
     motivo_anulacion = models.CharField(max_length=255, blank=True)
     observaciones = models.TextField(blank=True)
     creado_por = models.ForeignKey("core.Usuario", null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
@@ -201,6 +203,22 @@ class Factura(AuditableModel):
     def monto_cobrado(self) -> Decimal:
         return self.total - self.saldo
 
+    def calcular_saldo_pendiente(self, al=None) -> Decimal:
+        """Saldo pendiente recalculado desde los pagos (no anulados) aplicados a la factura.
+
+        `al`: fecha de corte opcional (saldo a esa fecha). El campo `saldo` es
+        este mismo valor guardado y se actualiza con cada pago o anulación.
+        """
+        if self.estado == self.Estado.ANULADA:
+            return CERO
+        aplic = self.aplicaciones.filter(pago__anulado=False) if self.pk else None
+        if aplic is None:
+            return self.total
+        if al:
+            aplic = aplic.filter(pago__fecha__lte=al)
+        cobrado = aplic.aggregate(s=Sum("monto"))["s"] or CERO
+        return max(self.total - cobrado, CERO)
+
     # ------------------------------------------------------------------ #
     def calcular_vencimiento(self):
         """Contado: vence el día de emisión. Crédito: emisión + plazo."""
@@ -221,10 +239,12 @@ class Factura(AuditableModel):
         self.saldo = self.total
 
     def actualizar_estado(self, hoy=None):
-        """pendiente / pagada_parcial / pagada / vencida según saldo y vencimiento.
+        """Estado según saldo y vencimiento:
 
-        Una factura con saldo después de su vencimiento queda "vencida" aunque
-        tenga pagos parciales (el monto cobrado se ve en `monto_cobrado`).
+        |                     | sin pagos  | con pagos parciales     | saldo 0 |
+        |---------------------|------------|-------------------------|---------|
+        | antes de vencer     | pendiente  | pagada_parcial          | pagada  |
+        | después de vencer   | vencida    | vencida_pago_parcial    | pagada  |
         """
         if self.estado == self.Estado.ANULADA:
             return self.estado
@@ -233,7 +253,7 @@ class Factura(AuditableModel):
         if self.saldo <= 0:
             self.estado = self.Estado.PAGADA
         elif self.fecha_vencimiento < hoy:
-            self.estado = self.Estado.VENCIDA
+            self.estado = self.Estado.VENCIDA_PAGO_PARCIAL if self.saldo < self.total else self.Estado.VENCIDA
         elif self.saldo < self.total:
             self.estado = self.Estado.PAGADA_PARCIAL
         else:
@@ -349,6 +369,8 @@ class ItemFactura(models.Model):
     def save(self, *args, **kwargs):
         if self.factura.aprobada_sifen:
             raise ValidationError("Documento aprobado por SIFEN: los ítems no se pueden modificar.")
+        self.cantidad, self.precio_unitario, self.descuento = (
+            Decimal(str(v)) for v in (self.cantidad, self.precio_unitario, self.descuento))
         bruto = self.cantidad * self.precio_unitario - self.descuento
         if bruto < 0:
             raise ValidationError({"descuento": "El descuento supera el importe del ítem."})

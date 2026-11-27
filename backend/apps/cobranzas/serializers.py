@@ -1,4 +1,6 @@
 from django.core.exceptions import ValidationError as DjangoValidationError
+from decimal import Decimal
+
 from rest_framework import serializers
 
 from apps.facturacion.models import Factura
@@ -64,14 +66,18 @@ class CobroContadoSerializer(serializers.Serializer):
     fecha = serializers.DateField(required=False)
 
 
+REVISION_READONLY = ["alertas", "revision", "mensaje_final", "comentario_revision", "revisada_por", "revisada_en"]
+
+
 class GestionCobroSerializer(serializers.ModelSerializer):
     cliente_razon_social = serializers.CharField(source="cliente.razon_social", read_only=True)
     cobrador_nombre = serializers.CharField(source="cobrador.username", read_only=True, default=None)
+    revisada_por_nombre = serializers.CharField(source="revisada_por.username", read_only=True, default=None)
 
     class Meta:
         model = GestionCobro
         fields = "__all__"
-        read_only_fields = ["cobrador", "creado_en", "promesa_cumplida"]
+        read_only_fields = ["cobrador", "creado_en", "promesa_cumplida", *REVISION_READONLY]
 
     def validate(self, attrs):
         facturas = attrs.get("facturas") or []
@@ -107,4 +113,38 @@ class GestionActualizacionSerializer(GestionCobroSerializer):
     """Tras registrar una gestión sólo se completa su resultado, promesa o próxima acción."""
 
     class Meta(GestionCobroSerializer.Meta):
-        read_only_fields = ["cobrador", "creado_en", "cliente", "tipo", "fecha_hora", "destinatario", "mensaje"]
+        read_only_fields = ["cobrador", "creado_en", "cliente", "tipo", "fecha_hora", "destinatario", "mensaje",
+                            *REVISION_READONLY]
+
+
+class RevisionGestionSerializer(serializers.Serializer):
+    """Decisión de tesorería sobre una gestión con alertas."""
+
+    decision = serializers.ChoiceField(choices=[("aprobada", "Aprobar tal cual"), ("modificada", "Modificar el mensaje")])
+    mensaje_final = serializers.CharField(required=False, allow_blank=True, default="")
+    comentario = serializers.CharField(required=False, allow_blank=True, default="", max_length=255)
+
+    def validate(self, attrs):
+        if attrs["decision"] == "modificada" and not attrs["mensaje_final"].strip():
+            raise serializers.ValidationError({"mensaje_final": "Escriba el mensaje que se comunicará al cliente."})
+        return attrs
+
+
+class RegistrarCobranzaSerializer(serializers.Serializer):
+    """Pago de UNA factura: cliente y moneda se toman de la factura."""
+
+    factura = serializers.PrimaryKeyRelatedField(queryset=Factura.objects.select_related("cliente"))
+    monto = serializers.DecimalField(max_digits=18, decimal_places=2, min_value=Decimal("0.01"))
+    fecha = serializers.DateField(required=False)
+    medio = serializers.ChoiceField(choices=Pago.Medio.choices)
+    moneda = serializers.ChoiceField(choices=[("PYG", "PYG"), ("USD", "USD")], required=False)
+    referencia = serializers.CharField(required=False, allow_blank=True, default="")
+    banco = serializers.CharField(required=False, allow_blank=True, default="")
+    numero_recibo = serializers.CharField(required=False, allow_blank=True, default="")
+    observaciones = serializers.CharField(required=False, allow_blank=True, default="")
+
+    def validate(self, attrs):
+        f = attrs["factura"]
+        if attrs.get("moneda") and attrs["moneda"] != f.moneda:
+            raise serializers.ValidationError({"moneda": f"La factura está en {f.moneda}."})
+        return attrs

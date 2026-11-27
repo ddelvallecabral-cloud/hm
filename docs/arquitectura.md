@@ -32,6 +32,10 @@ Dependencias entre módulos: `core` ← `clientes` ← `facturacion` ← `cobran
    estados pendiente · pagada_parcial · pagada · vencida, cobro al contado,
    pagos parciales con saldo a favor, gestiones de cobro no intimidatorias,
    promesas de pago, alertas y cuenta corriente.
-4. **Intereses por mora**: tasas BCP, motor de cálculo, simulador.
-5. **Tesorería y reportes**: DSO, aging, flujo de caja, IVA por período, morosidad.
-6. **Frontend** por módulo e **integración SIFEN** real.
+4. ✅ **Pagos y pantalla "Registrar cobranza"**: pago de una factura con
+   paso a pagada_parcial / pagada, estado "vencida y en proceso de pago
+   parcial", cálculo del saldo pendiente, buscador por cliente o número,
+   gestiones de cobro con alertas y revisión de tesorería, datos demo.
+5. **Intereses por mora**: tasas BCP, motor de cálculo, simulador.
+6. **Tesorería y reportes**: DSO, aging, flujo de caja, IVA por período, morosidad.
+7. **Frontend** por módulo e **integración SIFEN** real.

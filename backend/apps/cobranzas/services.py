@@ -19,9 +19,13 @@ from .models import AplicacionPago, GestionCobro, Pago, ParametrosCobranza
 CERO = Decimal("0")
 
 
+def saldo_pendiente(factura: Factura, al=None) -> Decimal:
+    """Saldo pendiente de una factura calculado desde sus pagos (ver Factura.calcular_saldo_pendiente)."""
+    return factura.calcular_saldo_pendiente(al)
+
+
 def recalcular_factura(factura: Factura, motivo: str = "") -> Factura:
-    cobrado = (factura.aplicaciones.filter(pago__anulado=False).aggregate(s=Sum("monto"))["s"] or CERO)
-    factura.saldo = max(factura.total - cobrado, CERO)
+    factura.saldo = saldo_pendiente(factura)
     factura.actualizar_estado()
     factura.motivo_auditoria = motivo
     factura.save()
@@ -81,6 +85,63 @@ def registrar_pago(datos: dict, imputaciones=None, automatico=False, usuario=Non
     if imputaciones:
         aplicar_pago(pago, imputaciones)
     return pago
+
+
+@transaction.atomic
+def registrar_cobranza(factura: Factura, monto, medio: str, fecha=None, usuario=None, **extra) -> Pago:
+    """Registra el pago de una factura (contado o crédito).
+
+    - monto < saldo  -> la factura queda "pagada_parcial" (o "vencida_pago_parcial" si ya venció);
+    - monto = saldo  -> la factura queda "pagada";
+    - monto > saldo  -> se rechaza (registrar el excedente como pago sin imputar si corresponde).
+    """
+    factura = Factura.objects.select_for_update().get(pk=factura.pk)
+    if factura.estado in (Factura.Estado.PAGADA, Factura.Estado.ANULADA):
+        raise ValidationError(f"La factura ya está {factura.get_estado_display().lower()}.")
+    monto = Decimal(monto)
+    if monto > factura.saldo:
+        raise ValidationError({"monto": f"El monto supera el saldo pendiente ({factura.moneda} {factura.saldo})."})
+    extra.pop("moneda", None)
+    return registrar_pago(
+        {"cliente": factura.cliente, "fecha": fecha or timezone.localdate(), "moneda": factura.moneda,
+         "monto": monto, "medio": medio, **extra},
+        imputaciones=[{"factura": factura, "monto": monto}], usuario=usuario,
+    )
+
+
+def buscar_facturas_por_cobrar(q: str = "", cliente_id=None, moneda=None, limite: int = 50):
+    """Facturas con saldo, buscando por número (001-001-0000123, 0000123 o 123), cliente o RUC."""
+    from django.db.models import Q
+
+    qs = Factura.objects.filter(estado__in=Factura.ESTADOS_ABIERTOS).select_related("cliente")
+    if cliente_id:
+        qs = qs.filter(cliente_id=cliente_id)
+    if moneda:
+        qs = qs.filter(moneda=moneda)
+    q = (q or "").strip()
+    if q:
+        filtro = Q(cliente__razon_social__icontains=q) | Q(cliente__ruc__startswith=q)
+        partes = q.replace(" ", "").split("-")
+        if all(p.isdigit() for p in partes):
+            if len(partes) == 3:
+                filtro |= Q(establecimiento=partes[0].zfill(3), punto_expedicion=partes[1].zfill(3),
+                            numero=partes[2].zfill(7))
+            elif len(partes) == 1 and len(partes[0]) <= 7:
+                filtro |= Q(numero=partes[0].zfill(7))
+        qs = qs.filter(filtro)
+    return qs.order_by("fecha_vencimiento", "id")[:limite]
+
+
+@transaction.atomic
+def revisar_gestion(gestion: GestionCobro, usuario, decision: str, mensaje_final="", comentario="") -> GestionCobro:
+    gestion.revision = decision
+    gestion.mensaje_final = mensaje_final if decision == GestionCobro.Revision.MODIFICADA else gestion.mensaje
+    gestion.comentario_revision = comentario
+    gestion.revisada_por = usuario
+    gestion.revisada_en = timezone.now()
+    gestion.motivo_auditoria = f"Revisión de tesorería: {decision}"
+    gestion.save()
+    return gestion
 
 
 @transaction.atomic

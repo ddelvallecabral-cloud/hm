@@ -5,10 +5,10 @@ crédito, facturas en **PYG** y **USD** con **IVA 10%**, clientes
 **particulares / profesionales / pymes**, datos compatibles con **SIFEN** e
 **intereses por mora** según los topes del **BCP**.
 
-> **Estado: fase 3** — clientes, roles, auditoría, facturación (IVA 10% exacto,
-> estados con vencida) y cobranzas (contado, pagos parciales, gestiones de
-> cobro). Intereses por mora, tesorería y reportes vienen en las fases
-> siguientes; ver [`docs/arquitectura.md`](docs/arquitectura.md).
+> **Estado: fase 4** — clientes, roles, auditoría, facturación (IVA 10% exacto),
+> cobranzas (contado, pagos parciales, gestiones con alertas) y la pantalla
+> **Registrar cobranza**. Intereses por mora, tesorería y reportes vienen en las
+> fases siguientes; ver [`docs/arquitectura.md`](docs/arquitectura.md).
 
 ## Stack
 
@@ -70,25 +70,63 @@ las migraciones hacen trazables los cambios del esquema.
 
 ### Opción A — Docker (recomendada)
 
-Requisitos: Docker y Docker Compose.
+Requisitos: [Docker Desktop](https://www.docker.com/products/docker-desktop/)
+abierto y Git. En macOS los comandos van en la app Terminal; en Windows, en PowerShell.
+
+1. Descargar el proyecto:
+
+```bash
+git clone https://github.com/ddelvallecabral-cloud/hm.git
+```
+
+```bash
+cd hm
+```
+
+2. Crear la configuración local a partir del ejemplo (en Windows: `copy backend\.env.example backend\.env`):
 
 ```bash
 cp backend/.env.example backend/.env
 ```
 
+3. Abrir `backend/.env` con un editor de texto y cambiar al menos
+   `DJANGO_SUPERUSER_PASSWORD` (contraseña del administrador inicial) y
+   `DJANGO_SECRET_KEY`.
+
+4. Levantar todo (la primera vez tarda unos minutos en descargar e instalar):
+
 ```bash
-make up
+docker compose up -d --build
+```
+
+Al arrancar se aplican las migraciones y se crea el usuario administrador
+definido en `.env`.
+
+- **Registrar cobranza:** <http://localhost:5173> (ingresar con el usuario administrador)
+- **Administración** (usuarios, roles, clientes, parámetros): <http://localhost:8000/admin/>
+- **API:** <http://localhost:8000/api/health/> → `{"status": "ok", "database": "ok"}`
+
+5. Opcional: cargar datos de demostración (3 clientes y 6 facturas marcados
+   "(DEMO)", usuarios `demo_tesorero` y `demo_cobrador` con la contraseña que elijas):
+
+```bash
+docker compose exec backend python manage.py cargar_demo --clave elegir-una-clave
+```
+
+Otros comandos útiles:
+
+```bash
+docker compose logs -f backend
 ```
 
 ```bash
-make superuser
+docker compose down
 ```
 
-- API: <http://localhost:8000/api/health/> → `{"status": "ok", "database": "ok"}`
-- Admin Django: <http://localhost:8000/admin/>
-- Frontend: <http://localhost:5173>
-
-Las migraciones se aplican solas al iniciar el backend. Tests: `make test`.
+`docker compose down` detiene todo y conserva los datos; `docker compose down -v`
+además **borra la base de datos**. PostgreSQL queda accesible sólo desde la
+misma computadora en el puerto 5433 (configurable con `DB_PUERTO_LOCAL`).
+Con `make` instalado existen atajos: `make up`, `make logs`, `make test`.
 
 ### Opción B — Local sin Docker
 
@@ -151,6 +189,7 @@ Todas están en [`backend/.env.example`](backend/.env.example).
 |---|---|---|---|
 | `DJANGO_SETTINGS_MODULE` | Entorno activo | `config.settings.dev` | `config.settings.prod` |
 | `DJANGO_SECRET_KEY` | Firma de sesiones/tokens | valor de ejemplo | **obligatoria**, aleatoria |
+| `DJANGO_SUPERUSER_USERNAME`, `DJANGO_SUPERUSER_PASSWORD`, `DJANGO_SUPERUSER_EMAIL` | Administrador inicial que crea `docker compose` al arrancar | `admin` / cambiar | no usar (crear con `createsuperuser`) |
 | `DJANGO_ALLOWED_HOSTS` | Dominios servidos | `localhost,127.0.0.1` | dominio real |
 | `LOG_LEVEL` | Nivel de log | `INFO` | `INFO` / `WARNING` |
 | `POSTGRES_DB` / `_USER` / `_HOST` / `_PORT` | Conexión a la BD | locales | servidor de BD |
@@ -192,6 +231,9 @@ básica). Los montos se envían y devuelven como texto decimal.
 | GET, POST | `/api/facturacion/facturas/` | lectura todos / alta tesorero | Alta con `items`; totales e IVA calculados |
 | GET, PATCH | `/api/facturacion/facturas/<id>/` | lectura todos / edición tesorero | Datos SIFEN, prórroga de vencimiento (con `motivo`), observaciones |
 | POST | `/api/facturacion/facturas/<id>/anular/` | tesorero | Requiere `motivo` |
+| GET | `/api/core/csrf/`, POST `/api/core/login/`, `/api/core/logout/` | público / todos | Sesión para el frontend |
+| POST | `/api/cobranzas/registrar-cobranza/` | tesorero | `{factura, monto, medio, fecha, referencia}`: pago de una factura; cliente y moneda salen de la factura |
+| GET | `/api/cobranzas/facturas-por-cobrar/?q=` | todos | Buscador por cliente, RUC o número (`001-001-0000123` o `123`) |
 | POST | `/api/cobranzas/cobro-contado/` | tesorero | `{factura, medio, referencia}` → cobra el saldo y deja la factura pagada |
 | GET, POST | `/api/cobranzas/pagos/` | lectura todos / alta tesorero | Pago total o parcial: `imputaciones` manuales, `aplicar_automatico` o sin imputar (saldo a favor) |
 | GET | `/api/cobranzas/pagos/<id>/` | todos | Detalle con aplicaciones y monto sin aplicar |
@@ -199,6 +241,9 @@ básica). Los montos se envían y devuelven como texto decimal.
 | POST | `/api/cobranzas/pagos/<id>/anular/` | tesorero | Requiere `motivo`; restituye saldos |
 | GET, POST | `/api/cobranzas/gestiones/` | todos | Llamadas, correos, WhatsApp, visitas, promesas de pago (`?cliente=&factura=&promesas_pendientes=1`) |
 | GET, PATCH | `/api/cobranzas/gestiones/<id>/` | todos (el cobrador sólo las suyas) | Completar resultado, promesa o próxima acción |
+| POST | `/api/cobranzas/gestiones/<id>/revisar/` | tesorero | Decisión de tesorería: `aprobada` o `modificada` con `mensaje_final` |
+| POST | `/api/cobranzas/gestiones/verificar/` | todos | Alertas que tendría una gestión, sin guardarla |
+| GET | `/api/cobranzas/recomendaciones/?factura=` | todos | Tono, canal y mensaje sugerido según los días de atraso |
 | GET | `/api/cobranzas/alertas/` | todos | Próximas a vencer (`?dias=`) y vencidas con días de atraso |
 | GET | `/api/cobranzas/cuenta-corriente/<cliente_id>/` | todos | Facturas abiertas, saldo vencido, últimos pagos y saldo a favor por moneda |
 
@@ -237,6 +282,7 @@ Pago parcial de esa factura:
 |---|:-:|:-:|:-:|
 | Consultar clientes, facturas, OC, pagos, alertas, cuenta corriente | ✔ | ✔ | ✔ |
 | Registrar gestiones de cobro y promesas de pago | ✔ | ✔ | ✔ (edita sólo las suyas) |
+| Revisar gestiones con alertas y decidir el mensaje final | ✔ | ✔ | |
 | Crear o editar clientes, facturas y OC | ✔ | ✔ | |
 | Registrar, aplicar o anular pagos | ✔ | ✔ | |
 | Anular facturas, cambiar vencimientos | ✔ | ✔ | |
@@ -268,8 +314,7 @@ ni borrar (tampoco desde el admin).
   **extrae**: `base = total × 100/110`, `IVA = base × 10%`. Con `false` se suma.
   Nunca se aplica IVA sobre un precio que ya lo incluye. Por el redondeo a
   guaraníes enteros, base + IVA puede diferir del total en 1 Gs. en algunos
-  importes (es la misma secuencia de cálculo del Manual Técnico SIFEN;
-  confirmarlo con el proveedor del facturador electrónico).
+  importes (criterio confirmado con el proveedor de facturación electrónica).
 - **Orden de compra:** opcional para profesionales y pymes (el campo se
   muestra, pero no bloquea la venta) y rechazada para particulares. Con
   `CRM_EXIGIR_OC=true` vuelve a ser obligatoria para profesionales y pymes. Debe ser del mismo cliente y la misma moneda, y lo facturado no
@@ -288,11 +333,19 @@ ni borrar (tampoco desde el admin).
   CRM: primero hay que registrar la cancelación ante la SET. La emisión y el
   envío del XML **no** están implementados (ver nota SIFEN más arriba).
 
-- **Estados de factura:** `pendiente` → `pagada_parcial` → `pagada`, o
-  `vencida` si pasa la fecha de vencimiento con saldo (aunque tenga pagos
-  parciales; lo cobrado se ve en `monto_cobrado`). `anulada` se conserva para
-  anulaciones. El cambio a vencida lo hace el comando diario
-  `actualizar_vencidas` y también cualquier pago o edición posterior.
+- **Estados de factura:**
+
+  |                   | sin pagos   | con pagos parciales                    | saldo 0 |
+  |-------------------|-------------|----------------------------------------|---------|
+  | antes de vencer   | `pendiente` | `pagada_parcial`                       | `pagada` |
+  | después de vencer | `vencida`   | `vencida_pago_parcial` (Vencida y en proceso de pago parcial) | `pagada` |
+
+  `anulada` se conserva para anulaciones. El paso a vencida lo hace el comando
+  diario `actualizar_vencidas` y también cualquier pago posterior.
+- **Saldo pendiente:** `Factura.calcular_saldo_pendiente(al=fecha)` (o
+  `cobranzas.services.saldo_pendiente`) lo recalcula desde los pagos no
+  anulados, opcionalmente a una fecha de corte; el campo `saldo` guarda ese
+  valor y se actualiza con cada pago o anulación.
 
 ### Cobranzas
 
@@ -305,21 +358,33 @@ ni borrar (tampoco desde el admin).
   (cheque rechazado, error) restituye los saldos. Transferencias y cheques
   exigen número de referencia. El comprobante de retención de IVA se registra
   como un pago con medio `retencion`.
-- **Gestiones de cobro (no intimidatorias):** se registra el historial de
-  llamadas, correos, WhatsApp, visitas, notas y promesas de pago. Reglas
-  configurables en `/admin/` → Parámetros de cobranza:
-  - contacto sólo de 8:00 a 19:00 de lunes a viernes, sábados hasta 12:00, ni
-    domingos ni feriados (tabla `Feriado`);
-  - máximo 3 contactos por cliente en 7 días;
-  - sólo con el titular o un contacto autorizado, nunca con terceros;
-  - WhatsApp/SMS sólo si el cliente lo autorizó (`acepta_whatsapp`);
-  - se rechazan mensajes con amenazas (cárcel, embargo inmediato), falsedades o
-    insultos, o que mencionen a la familia o al empleador.
+- **Pantalla "Registrar cobranza"** (<http://localhost:5173>): se busca la
+  factura por cliente, RUC o número, se ve total, cobrado y saldo, se carga
+  monto (acepta `4.000.000`), fecha, medio y referencia, y antes de confirmar
+  muestra en qué estado quedará la factura. Un monto mayor al saldo no se acepta.
+  El cobrador puede consultar, pero sólo tesorería registra.
+- **Pago de una factura vs. pago de varias:** `registrar-cobranza` aplica un
+  pago a una factura (el caso del día a día). El modelo `Pago` se vincula a las
+  facturas mediante `AplicacionPago`, de modo que una misma transferencia
+  también puede cancelar varias facturas (`/api/cobranzas/pagos/`).
+- **Gestiones de cobro (alertas, sin bloqueos):** se registra el historial de
+  llamadas, correos, WhatsApp, visitas, notas y promesas de pago. El sistema
+  **nunca impide** registrar una gestión: evalúa buenas prácticas y, si algo
+  conviene revisarlo, guarda alertas y deja la gestión *pendiente de revisión*.
+  Tesorería decide: la aprueba tal cual o escribe el mensaje final que se
+  comunicará al cliente (queda auditado). Generan alerta:
+  - contactos fuera de 8:00–19:00 de lunes a viernes, sábados después de las
+    12:00, domingos o feriados (tabla `Feriado`);
+  - más de 3 contactos con el mismo cliente en 7 días;
+  - WhatsApp/SMS sin consentimiento registrado (`acepta_whatsapp`);
+  - expresiones que pueden resultar intimidatorias o involucrar a terceros.
 
-  Las notas internas no tienen restricción de horario. Las promesas vencidas
-  se marcan como cumplidas o incumplidas con el comando diario
-  `evaluar_promesas`. Ajustar la lista de expresiones y los horarios con la
-  asesoría legal (Ley 1334/98 de Defensa del Consumidor).
+  `recomendaciones/?factura=` sugiere tono, canal y un texto con los datos
+  reales de la factura según el atraso (por vencer, 1–15, 16–30, 31–60 y más
+  de 60 días), más una lista de buenas prácticas. Los criterios se ajustan en
+  `/admin/` → Parámetros de cobranza y deben revisarse con la asesoría legal
+  (Ley 1334/98 de Defensa del Consumidor). Las promesas vencidas se marcan como
+  cumplidas o incumplidas con el comando diario `evaluar_promesas`.
 
 ### Tareas programadas
 
