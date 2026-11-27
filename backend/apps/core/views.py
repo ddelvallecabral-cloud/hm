@@ -31,7 +31,11 @@ def me(request):
 
 
 class AuditLogListView(generics.ListAPIView):
-    """Bitácora (sólo administradores). Filtros: ?modelo=facturacion.Factura &objeto_id= &usuario= &accion="""
+    """Bitácora (sólo administradores).
+
+    Filtros: ?modelo=facturacion.Factura &objeto_id= &usuario= &accion= &campo=fecha_vencimiento
+    &desde=AAAA-MM-DD &hasta=AAAA-MM-DD
+    """
 
     serializer_class = AuditLogSerializer
     permission_classes = [SoloAdministrador]
@@ -43,7 +47,57 @@ class AuditLogListView(generics.ListAPIView):
                               ("usuario", "usuario_nombre")):
             if p.get(campo):
                 qs = qs.filter(**{filtro: p[campo]})
+        if p.get("campo"):
+            qs = qs.filter(cambios__has_key=p["campo"])
+        if p.get("desde"):
+            qs = qs.filter(fecha_hora__date__gte=p["desde"])
+        if p.get("hasta"):
+            qs = qs.filter(fecha_hora__date__lte=p["hasta"])
         return qs
+
+
+class UsuarioListCreateView(generics.ListCreateAPIView):
+    """Usuarios del CRM (sólo administradores). ?rol= &activo=true|false"""
+
+    serializer_class = None
+    permission_classes = [SoloAdministrador]
+
+    def get_serializer_class(self):
+        from .serializers import UsuarioAdminSerializer
+
+        return UsuarioAdminSerializer
+
+    def get_queryset(self):
+        from .models import Usuario
+
+        qs = Usuario.objects.order_by("username")
+        p = self.request.query_params
+        if p.get("rol"):
+            qs = qs.filter(rol=p["rol"])
+        if p.get("activo") in ("true", "false"):
+            qs = qs.filter(is_active=p["activo"] == "true")
+        return qs
+
+
+class UsuarioDetailView(generics.RetrieveUpdateAPIView):
+    """Cambiar rol, datos o activar/desactivar un usuario. Envíe "motivo" para la auditoría."""
+
+    permission_classes = [SoloAdministrador]
+    http_method_names = ["get", "patch", "head", "options"]
+
+    def get_serializer_class(self):
+        from .serializers import UsuarioAdminSerializer
+
+        return UsuarioAdminSerializer
+
+    def get_queryset(self):
+        from .models import Usuario
+
+        return Usuario.objects.all()
+
+    def perform_update(self, serializer):
+        serializer.instance.motivo_auditoria = self.request.data.get("motivo", "")
+        serializer.save()
 
 
 def montos_a_texto(obj):

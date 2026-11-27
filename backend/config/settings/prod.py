@@ -2,12 +2,10 @@
 from config.env import env, env_bool, env_int
 
 from .base import *  # noqa: F401,F403
-from .base import CRM
 
 DEBUG = False
 SECRET_KEY = env("DJANGO_SECRET_KEY", requerido=True)
 DATABASES["default"]["PASSWORD"] = env("POSTGRES_PASSWORD", requerido=True)  # noqa: F405
-CRM["SIFEN_AMBIENTE"] = env("SIFEN_AMBIENTE", "prod")
 
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 SECURE_SSL_REDIRECT = env_bool("SECURE_SSL_REDIRECT", True)

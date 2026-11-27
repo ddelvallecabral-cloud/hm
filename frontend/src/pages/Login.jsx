@@ -23,10 +23,18 @@ export default function Login({ onIngreso }) {
 
   return (
     <main className="login">
-      <form className="panel login-form" onSubmit={ingresar}>
+      <section className="login-marca">
+        <span className="placa-logo grande"><img src="/marca/logo-hierro-metal.jpg" alt="Hierro Metal S.R.L." width="140" height="140" /></span>
+        <div>
+          <span className="filete" />
+          <h1>La solidez<br />que sostiene<br /><span className="amarillo">tus proyectos</span></h1>
+          <p>CRM de Tesorería · uso interno</p>
+        </div>
+      </section>
+      <form className="login-form" onSubmit={ingresar}>
         <div>
           <p className="eyebrow">Tesorería</p>
-          <h1>CRM de cobranzas</h1>
+          <h2>Ingresar</h2>
         </div>
         <label htmlFor="usuario">Usuario</label>
         <input id="usuario" autoComplete="username" value={username} onChange={(e) => setUsername(e.target.value)} required />

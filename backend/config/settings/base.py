@@ -98,7 +98,7 @@ CORS_ALLOWED_ORIGINS = env_list("CORS_ALLOWED_ORIGINS", "http://localhost:5173")
 CSRF_TRUSTED_ORIGINS = env_list("CSRF_TRUSTED_ORIGINS", "http://localhost:5173")
 
 # ---------------------------------------------------------------------------
-# Parámetros del dominio (sólo se declaran; se usarán en etapas siguientes)
+# Parámetros del dominio
 # ---------------------------------------------------------------------------
 CRM = {
     "MONEDAS": ["PYG", "USD"],
@@ -109,13 +109,6 @@ CRM = {
     "TOPE_MENSUAL_USD": Decimal(env("CRM_TOPE_MENSUAL_USD", "1.00")),  # % mensual para moneda extranjera
     "USAR_TASA_BCP_SIN_PACTO": env_bool("CRM_USAR_TASA_BCP_SIN_PACTO", True),
     "PERMITIR_TASA_MES_ANTERIOR": env_bool("CRM_PERMITIR_TASA_MES_ANTERIOR", True),
-    # SIFEN - Facturación electrónica (SET). Integración real pendiente.
-    "SIFEN_AMBIENTE": env("SIFEN_AMBIENTE", "test"),  # test | prod
-    "SIFEN_URL_WS": env("SIFEN_URL_WS", ""),
-    "SIFEN_CERT_PATH": env("SIFEN_CERT_PATH", ""),
-    "SIFEN_CERT_PASSWORD": env("SIFEN_CERT_PASSWORD", ""),
-    "SIFEN_ID_CSC": env("SIFEN_ID_CSC", ""),
-    "SIFEN_CSC": env("SIFEN_CSC", ""),
     "EMPRESA_RUC": env("EMPRESA_RUC", ""),
     "EMPRESA_TIMBRADO": env("EMPRESA_TIMBRADO", ""),
 }

@@ -250,7 +250,10 @@ class Factura(AuditableModel):
             return self.estado
         hoy = hoy or getattr(self, "_fecha_estado", None) or timezone.localdate()
         self._fecha_estado = hoy  # save() reutiliza la misma fecha de referencia
-        if self.saldo <= 0:
+        if self.total <= 0:
+            # Factura recién creada, antes de sumar sus ítems: todavía no hay importe que cobrar.
+            self.estado = self.Estado.PENDIENTE
+        elif self.saldo <= 0:
             self.estado = self.Estado.PAGADA
         elif self.fecha_vencimiento < hoy:
             self.estado = self.Estado.VENCIDA_PAGO_PARCIAL if self.saldo < self.total else self.Estado.VENCIDA

@@ -6,44 +6,6 @@ from django.db import models
 from .audit import ip_actual, resolver_usuario
 
 
-class Usuario(AbstractUser):
-    """Usuario del CRM con un rol de negocio.
-
-    | Acción                                         | Admin | Tesorero | Cobrador |
-    |------------------------------------------------|:-----:|:--------:|:--------:|
-    | Consultar clientes, facturas, OC               |   ✔   |    ✔     |    ✔     |
-    | Crear/editar clientes, facturas, OC            |   ✔   |    ✔     |          |
-    | Anular facturas, cambiar vencimientos          |   ✔   |    ✔     |          |
-    | Consultar la bitácora de auditoría             |   ✔   |          |          |
-    | Gestionar usuarios y parámetros (Django admin) |   ✔   |          |          |
-    """
-
-    class Rol(models.TextChoices):
-        ADMINISTRADOR = "administrador", "Administrador"
-        TESORERO = "tesorero", "Tesorero"
-        COBRADOR = "cobrador", "Cobrador"
-
-    rol = models.CharField(max_length=15, choices=Rol.choices, default=Rol.COBRADOR)
-
-    class Meta:
-        db_table = "usuarios"
-
-    @property
-    def es_administrador(self) -> bool:
-        return self.is_superuser or self.rol == self.Rol.ADMINISTRADOR
-
-    @property
-    def es_tesorero(self) -> bool:
-        """Tesorero o superior."""
-        return self.es_administrador or self.rol == self.Rol.TESORERO
-
-    def save(self, *args, **kwargs):
-        # El administrador del CRM necesita entrar al admin de Django.
-        if self.rol == self.Rol.ADMINISTRADOR:
-            self.is_staff = True
-        super().save(*args, **kwargs)
-
-
 class AuditLog(models.Model):
     """Bitácora inmutable: quién, cuándo, desde dónde, qué cambió y por qué."""
 
@@ -53,7 +15,7 @@ class AuditLog(models.Model):
         ELIMINAR = "eliminar", "Eliminar"
 
     fecha_hora = models.DateTimeField(auto_now_add=True, db_index=True)
-    usuario = models.ForeignKey(Usuario, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
+    usuario = models.ForeignKey("core.Usuario", null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
     usuario_nombre = models.CharField(max_length=150, blank=True, help_text="Copia del username (se conserva aunque se borre el usuario).")
     ip = models.GenericIPAddressField(null=True, blank=True)
     accion = models.CharField(max_length=10, choices=Accion.choices)
@@ -132,3 +94,44 @@ class AuditableModel(models.Model):
         cambios = {c: [_valor(getattr(self, c)), None] for c in self._campos_auditados()}
         self._registrar(AuditLog.Accion.ELIMINAR, cambios)
         return super().delete(*args, **kwargs)
+
+
+class Usuario(AuditableModel, AbstractUser):
+    """Usuario del CRM con un rol de negocio.
+
+    | Acción                                         | Admin | Tesorero | Cobrador |
+    |------------------------------------------------|:-----:|:--------:|:--------:|
+    | Consultar clientes, facturas, OC               |   ✔   |    ✔     |    ✔     |
+    | Crear/editar clientes, facturas, OC            |   ✔   |    ✔     |          |
+    | Anular facturas, cambiar vencimientos          |   ✔   |    ✔     |          |
+    | Consultar la bitácora de auditoría             |   ✔   |          |          |
+    | Gestionar usuarios y parámetros (Django admin) |   ✔   |          |          |
+    """
+
+    class Rol(models.TextChoices):
+        ADMINISTRADOR = "administrador", "Administrador"
+        TESORERO = "tesorero", "Tesorero"
+        COBRADOR = "cobrador", "Cobrador"
+
+    rol = models.CharField(max_length=15, choices=Rol.choices, default=Rol.COBRADOR)
+
+    # Cambios de rol y de acceso quedan en la auditoría (nunca la contraseña).
+    CAMPOS_AUDITADOS = ("username", "rol", "is_active", "is_staff", "is_superuser")
+
+    class Meta:
+        db_table = "usuarios"
+
+    @property
+    def es_administrador(self) -> bool:
+        return self.is_superuser or self.rol == self.Rol.ADMINISTRADOR
+
+    @property
+    def es_tesorero(self) -> bool:
+        """Tesorero o superior."""
+        return self.es_administrador or self.rol == self.Rol.TESORERO
+
+    def save(self, *args, **kwargs):
+        # El administrador del CRM necesita entrar al admin de Django.
+        if self.rol == self.Rol.ADMINISTRADOR:
+            self.is_staff = True
+        super().save(*args, **kwargs)

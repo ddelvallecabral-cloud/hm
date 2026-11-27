@@ -6,7 +6,7 @@
 |---|---|---|
 | `core` | Usuarios y roles (administrador, tesorero, cobrador), bitácora de auditoría | `Usuario`, `AuditLog` |
 | `clientes` | Ficha de cliente: RUC con dígito verificador, tipo (particular / profesional / pyme), condición de pago, plazo y límite de crédito, contacto de cobranza | `Cliente` |
-| `facturacion` | Facturas con base / IVA 10% / total, estados, datos SIFEN (CDC, timbrado, estado del DTE), OC opcional para profesionales y pymes, prohibida para particulares | `Factura`, `ItemFactura`, `OrdenCompra` |
+| `facturacion` | Facturas con base / IVA 10% / total, estados, datos SIFEN de referencia (CDC, timbrado, estado del DTE), OC opcional para profesionales y pymes, prohibida para particulares | `Factura`, `ItemFactura`, `OrdenCompra` |
 | `cobranzas` | Cobro al contado, pagos (uno por factura) totales o parciales, historial de gestiones y promesas de pago con reglas de cobranza no intimidatoria, alertas, cuenta corriente | `Pago`, `GestionCobro`, `ParametrosCobranza`, `Feriado` |
 | `intereses` | Tabla de tasas máximas del BCP por mes y moneda, cálculo del interés moratorio (Art. 475 CC, Art. 44 Ley 489/95), alertas de ajuste, simulador | `TasaReferenciaBCP`, `AlertaTasa` |
 | `tesoreria` | DSO, aging (corriente, 1-30, 31-60, 61-90, 90+), proyección de flujo de caja, alertas de vencimiento; siempre separado por moneda | (sin modelos propios) |
@@ -42,4 +42,9 @@ Dependencias entre módulos: `core` ← `clientes` ← `facturacion` ← `cobran
 6. ✅ **Dashboard y reportes**: cartera por aging con interés por mora,
    totales PYG/USD, DSO y cobro real promedio; estado de cuenta, IVA débito
    fiscal por período y OC pendientes de conciliación; exportación CSV.
-7. **Frontend** por módulo e **integración SIFEN** real.
+7. ✅ **Pantallas, roles y auditoría**: todas las pantallas (facturas con
+   historial y gestiones, clientes, gestiones, tasas BCP, usuarios, auditoría),
+   usuarios y roles desde el CRM, auditoría filtrable, historial por factura e
+   identidad visual de Hierro Metal. Sin integración SIFEN: el CRM es de uso
+   interno y registra las facturas emitidas por el sistema de facturación.
+8. **Instalación** en la computadora de la empresa con Docker.
