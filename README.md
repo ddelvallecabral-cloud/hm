@@ -49,7 +49,7 @@ las migraciones hacen trazables los cambios del esquema.
 │       ├── core/                  # usuarios, roles, auditoría, utilidades monetarias
 │       ├── clientes/              # ficha de cliente, RUC, tipo, crédito
 │       ├── facturacion/           # facturas, IVA 10%, SIFEN, órdenes de compra
-│       ├── cobranzas/             # pagos, aplicaciones, gestiones de cobro
+│       ├── cobranzas/             # pagos, gestiones de cobro
 │       ├── intereses/             # tasas BCP, mora y punitorios PYG/USD
 │       ├── tesoreria/             # DSO, aging, flujo de caja, alertas
 │       └── reportes/              # estado de cuenta, morosidad, IVA, OC
@@ -235,9 +235,8 @@ básica). Los montos se envían y devuelven como texto decimal.
 | POST | `/api/cobranzas/registrar-cobranza/` | tesorero | `{factura, monto, medio, fecha, referencia}`: pago de una factura; cliente y moneda salen de la factura |
 | GET | `/api/cobranzas/facturas-por-cobrar/?q=` | todos | Buscador por cliente, RUC o número (`001-001-0000123` o `123`) |
 | POST | `/api/cobranzas/cobro-contado/` | tesorero | `{factura, medio, referencia}` → cobra el saldo y deja la factura pagada |
-| GET, POST | `/api/cobranzas/pagos/` | lectura todos / alta tesorero | Pago total o parcial: `imputaciones` manuales, `aplicar_automatico` o sin imputar (saldo a favor) |
-| GET | `/api/cobranzas/pagos/<id>/` | todos | Detalle con aplicaciones y monto sin aplicar |
-| POST | `/api/cobranzas/pagos/<id>/aplicar/` | tesorero | Aplica saldo a favor a facturas |
+| GET, POST | `/api/cobranzas/pagos/` | lectura todos / alta tesorero | Pago total o parcial de una factura: `{factura, monto, medio, fecha, moneda, referencia}` (filtros `?factura=&cliente=`) |
+| GET | `/api/cobranzas/pagos/<id>/` | todos | Detalle del pago, con saldo y estado actuales de la factura |
 | POST | `/api/cobranzas/pagos/<id>/anular/` | tesorero | Requiere `motivo`; restituye saldos |
 | GET, POST | `/api/cobranzas/gestiones/` | todos | Llamadas, correos, WhatsApp, visitas, promesas de pago (`?cliente=&factura=&promesas_pendientes=1`) |
 | GET, PATCH | `/api/cobranzas/gestiones/<id>/` | todos (el cobrador sólo las suyas) | Completar resultado, promesa o próxima acción |
@@ -245,7 +244,7 @@ básica). Los montos se envían y devuelven como texto decimal.
 | POST | `/api/cobranzas/gestiones/verificar/` | todos | Alertas que tendría una gestión, sin guardarla |
 | GET | `/api/cobranzas/recomendaciones/?factura=` | todos | Tono, canal y mensaje sugerido según los días de atraso |
 | GET | `/api/cobranzas/alertas/` | todos | Próximas a vencer (`?dias=`) y vencidas con días de atraso |
-| GET | `/api/cobranzas/cuenta-corriente/<cliente_id>/` | todos | Facturas abiertas, saldo vencido, últimos pagos y saldo a favor por moneda |
+| GET | `/api/cobranzas/cuenta-corriente/<cliente_id>/` | todos | Facturas abiertas, saldo vencido y últimos pagos por moneda |
 
 Ejemplo de alta de factura a crédito para una pyme:
 
@@ -269,9 +268,8 @@ Respuesta (extracto): `base_imponible = 10000000.00`, `iva = 1000000.00`,
 Pago parcial de esa factura:
 
 ```json
-{"cliente": 2, "fecha": "2026-12-10", "moneda": "PYG", "monto": "4000000",
- "medio": "transferencia", "referencia": "SIPAP 889123",
- "imputaciones": [{"factura": 15, "monto": "4000000"}]}
+{"factura": 15, "fecha": "2026-12-10", "monto": "4000000",
+ "medio": "transferencia", "referencia": "SIPAP 889123"}
 ```
 
 → la factura queda `pagada_parcial` con `saldo = 7000000.00`.
@@ -284,7 +282,7 @@ Pago parcial de esa factura:
 | Registrar gestiones de cobro y promesas de pago | ✔ | ✔ | ✔ (edita sólo las suyas) |
 | Revisar gestiones con alertas y decidir el mensaje final | ✔ | ✔ | |
 | Crear o editar clientes, facturas y OC | ✔ | ✔ | |
-| Registrar, aplicar o anular pagos | ✔ | ✔ | |
+| Registrar o anular pagos | ✔ | ✔ | |
 | Anular facturas, cambiar vencimientos | ✔ | ✔ | |
 | Consultar la auditoría | ✔ | | |
 | Gestionar usuarios (admin de Django) | ✔ | | |
@@ -351,11 +349,12 @@ ni borrar (tampoco desde el admin).
 
 - **Contado:** `cobro-contado` crea el pago por el saldo y deja la factura
   `pagada` en una sola operación.
-- **Pagos parciales:** un pago puede repartirse entre varias facturas del mismo
-  cliente y la misma moneda, sin superar el saldo de ninguna. Lo no aplicado
-  queda como saldo a favor para usarlo después. `aplicar_automatico` imputa
-  de la factura que vence primero a la que vence última. Anular un pago
-  (cheque rechazado, error) restituye los saldos. Transferencias y cheques
+- **Pagos (esquema simple):** cada `Pago` pertenece a **una** factura (FK),
+  con monto, fecha, medio de pago y moneda (la de la factura). Si el monto es
+  menor al saldo la factura queda `pagada_parcial`; si lo cubre, `pagada`; si
+  lo supera, se rechaza. Un cobro que cancela varias facturas se registra
+  como un pago por factura con la misma referencia. Anular un pago (cheque
+  rechazado, error) restituye el saldo. Transferencias y cheques
   exigen número de referencia. El comprobante de retención de IVA se registra
   como un pago con medio `retencion`.
 - **Pantalla "Registrar cobranza"** (<http://localhost:5173>): se busca la
@@ -363,10 +362,6 @@ ni borrar (tampoco desde el admin).
   monto (acepta `4.000.000`), fecha, medio y referencia, y antes de confirmar
   muestra en qué estado quedará la factura. Un monto mayor al saldo no se acepta.
   El cobrador puede consultar, pero sólo tesorería registra.
-- **Pago de una factura vs. pago de varias:** `registrar-cobranza` aplica un
-  pago a una factura (el caso del día a día). El modelo `Pago` se vincula a las
-  facturas mediante `AplicacionPago`, de modo que una misma transferencia
-  también puede cancelar varias facturas (`/api/cobranzas/pagos/`).
 - **Gestiones de cobro (alertas, sin bloqueos):** se registra el historial de
   llamadas, correos, WhatsApp, visitas, notas y promesas de pago. El sistema
   **nunca impide** registrar una gestión: evalúa buenas prácticas y, si algo

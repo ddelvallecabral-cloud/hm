@@ -204,19 +204,19 @@ class Factura(AuditableModel):
         return self.total - self.saldo
 
     def calcular_saldo_pendiente(self, al=None) -> Decimal:
-        """Saldo pendiente recalculado desde los pagos (no anulados) aplicados a la factura.
+        """Saldo pendiente = total − pagos no anulados de la factura.
 
         `al`: fecha de corte opcional (saldo a esa fecha). El campo `saldo` es
         este mismo valor guardado y se actualiza con cada pago o anulación.
         """
         if self.estado == self.Estado.ANULADA:
             return CERO
-        aplic = self.aplicaciones.filter(pago__anulado=False) if self.pk else None
-        if aplic is None:
+        if not self.pk:
             return self.total
+        pagos = self.pagos.filter(anulado=False)
         if al:
-            aplic = aplic.filter(pago__fecha__lte=al)
-        cobrado = aplic.aggregate(s=Sum("monto"))["s"] or CERO
+            pagos = pagos.filter(fecha__lte=al)
+        cobrado = pagos.aggregate(s=Sum("monto"))["s"] or CERO
         return max(self.total - cobrado, CERO)
 
     # ------------------------------------------------------------------ #

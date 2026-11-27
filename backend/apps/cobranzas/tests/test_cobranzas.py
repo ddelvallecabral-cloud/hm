@@ -61,7 +61,7 @@ class CobroContadoTest(Base):
         f.refresh_from_db()
         self.assertEqual((f.estado, f.saldo), ("pagada", 0))
         self.assertEqual(r.json()["monto"], "2200000.00")
-        self.assertEqual(r.json()["monto_sin_aplicar"], "0.00")
+        self.assertEqual(r.json()["factura"], f.pk)
 
     def test_no_cobra_dos_veces(self):
         f = self.factura(self.particular, 1_000_000)
@@ -87,60 +87,49 @@ class CobroContadoTest(Base):
 
 
 class PagosParcialesTest(Base):
-    def pago(self, monto, **kw):
-        datos = {"cliente": self.pyme.pk, "fecha": HOY.isoformat(), "moneda": "PYG", "monto": str(monto),
+    def pago(self, factura, monto, **kw):
+        datos = {"factura": factura.pk, "fecha": HOY.isoformat(), "monto": str(monto),
                  "medio": "transferencia", "referencia": "SIPAP-001", **kw}
         return self.api.post(f"{P}pagos/", datos, format="json")
 
     def test_pago_parcial_y_luego_total(self):
         f = self.factura(self.pyme, 10_000_000, "credito", 30)
-        r = self.pago(4_000_000, imputaciones=[{"factura": f.pk, "monto": "4000000"}])
+        r = self.pago(f, 4_000_000)
         self.assertEqual(r.status_code, 201, r.content)
+        self.assertEqual((r.json()["factura_estado"], r.json()["moneda"], r.json()["cliente"]),
+                         ("pagada_parcial", "PYG", self.pyme.pk))
         f.refresh_from_db()
         self.assertEqual((f.estado, f.saldo), ("pagada_parcial", Decimal(6_000_000)))
-        self.pago(6_000_000, imputaciones=[{"factura": f.pk, "monto": "6000000"}])
+        self.pago(f, 6_000_000)
         f.refresh_from_db()
         self.assertEqual((f.estado, f.saldo), ("pagada", 0))
         log = AuditLog.objects.filter(modelo="facturacion.Factura", objeto_id=str(f.pk)).latest("id")
         self.assertEqual(log.cambios["estado"], ["pagada_parcial", "pagada"])
         self.assertEqual(log.usuario, self.tesorero)
+        self.assertEqual(f.pagos.count(), 2)
 
     def test_no_supera_saldo_de_factura(self):
         f = self.factura(self.pyme, 1_000_000, "credito", 30)
-        r = self.pago(2_000_000, imputaciones=[{"factura": f.pk, "monto": "2000000"}])
+        r = self.pago(f, 2_000_000)
         self.assertEqual(r.status_code, 400)
-        self.assertEqual(Pago.objects.count(), 0)  # la transacción revirtió el pago
+        self.assertEqual(Pago.objects.count(), 0)
 
-    def test_imputacion_automatica_mas_antigua_primero(self):
-        vieja = self.factura(self.pyme, 3_000_000, "credito", 30, emision=HOY - timedelta(days=20))
-        nueva = self.factura(self.pyme, 5_000_000, "credito", 30)
-        r = self.pago(4_000_000, aplicar_automatico=True)
-        self.assertEqual(r.status_code, 201, r.content)
-        vieja.refresh_from_db()
-        nueva.refresh_from_db()
-        self.assertEqual(vieja.estado, "pagada")
-        self.assertEqual(nueva.saldo, Decimal(4_000_000))
-
-    def test_saldo_a_favor_y_aplicacion_posterior(self):
-        r = self.pago(1_500_000)
-        pid = r.json()["id"]
-        self.assertEqual(r.json()["monto_sin_aplicar"], "1500000.00")
+    def test_factura_pagada_no_admite_pagos(self):
         f = self.factura(self.pyme, 1_000_000, "credito", 30)
-        r = self.api.post(f"{P}pagos/{pid}/aplicar/", {"imputaciones": [{"factura": f.pk, "monto": "1000000"}]},
-                          format="json")
-        self.assertEqual(r.status_code, 200, r.content)
-        self.assertEqual(r.json()["monto_sin_aplicar"], "500000.00")
-        cc = self.api.get(f"{P}cuenta-corriente/{self.pyme.pk}/").json()
-        self.assertEqual(cc["monedas"]["PYG"]["saldo_a_favor"], "500000.00")
+        self.pago(f, 1_000_000)
+        self.assertEqual(self.pago(f, 1).status_code, 400)
 
     def test_moneda_distinta(self):
         f = self.factura(self.pyme, 1_000, "credito", 30, moneda="USD")
-        r = self.pago(1_000_000, imputaciones=[{"factura": f.pk, "monto": "1000"}])
+        r = self.pago(f, 100, moneda="PYG")
         self.assertEqual(r.status_code, 400)
+        self.assertIn("moneda", r.json())
+        r = self.pago(f, "100.50")
+        self.assertEqual((r.status_code, r.json()["moneda"]), (201, "USD"))
 
     def test_anular_pago_restituye_saldo(self):
         f = self.factura(self.pyme, 2_000_000, "credito", 30)
-        pid = self.pago(2_000_000, imputaciones=[{"factura": f.pk, "monto": "2000000"}]).json()["id"]
+        pid = self.pago(f, 2_000_000).json()["id"]
         self.assertEqual(self.api.post(f"{P}pagos/{pid}/anular/", {}, format="json").status_code, 400)
         r = self.api.post(f"{P}pagos/{pid}/anular/", {"motivo": "Cheque rechazado"}, format="json")
         self.assertEqual(r.status_code, 200, r.content)
@@ -150,10 +139,25 @@ class PagosParcialesTest(Base):
     def test_pago_parcial_en_factura_vencida(self):
         f = self.factura(self.pyme, 2_000_000, "credito", 30, emision=HOY - timedelta(days=40))
         self.assertEqual(f.estado, "vencida")
-        self.pago(500_000, imputaciones=[{"factura": f.pk, "monto": "500000"}])
+        self.pago(f, 500_000)
         f.refresh_from_db()
         self.assertEqual((f.estado, f.monto_cobrado), ("vencida_pago_parcial", Decimal(500_000)))
         self.assertEqual(f.get_estado_display(), "Vencida y en proceso de pago parcial")
+
+    def test_listado_por_factura_y_cliente(self):
+        f1 = self.factura(self.pyme, 1_000_000, "credito", 30)
+        f2 = self.factura(self.particular, 1_000_000)
+        self.pago(f1, 100_000)
+        self.api.post(f"{P}cobro-contado/", {"factura": f2.pk, "medio": "efectivo"}, format="json")
+        self.assertEqual(self.api.get(f"{P}pagos/", {"factura": f1.pk}).json()["count"], 1)
+        self.assertEqual(self.api.get(f"{P}pagos/", {"cliente": self.particular.pk}).json()["count"], 1)
+
+    def test_cuenta_corriente(self):
+        f = self.factura(self.pyme, 3_000_000, "credito", 30, emision=HOY - timedelta(days=40))
+        self.pago(f, 1_000_000)
+        cc = self.api.get(f"{P}cuenta-corriente/{self.pyme.pk}/").json()["monedas"]["PYG"]
+        self.assertEqual((cc["saldo_pendiente"], cc["saldo_vencido"]), ("2000000.00", "2000000.00"))
+        self.assertEqual(cc["ultimos_pagos"][0]["factura"], f.numero_completo)
 
     def test_alertas(self):
         self.factura(self.pyme, 1_000_000, "credito", 30, emision=HOY - timedelta(days=27))  # vence en 3 días

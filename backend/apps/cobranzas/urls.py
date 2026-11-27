@@ -9,7 +9,6 @@ urlpatterns = [
     path("facturas-por-cobrar/", views.facturas_por_cobrar, name="facturas-por-cobrar"),
     path("pagos/", views.PagoListCreateView.as_view(), name="pagos"),
     path("pagos/<int:pk>/", views.PagoDetailView.as_view(), name="pago"),
-    path("pagos/<int:pk>/aplicar/", views.aplicar_pago, name="aplicar"),
     path("pagos/<int:pk>/anular/", views.anular_pago, name="anular"),
     path("gestiones/", views.GestionListCreateView.as_view(), name="gestiones"),
     path("gestiones/<int:pk>/", views.GestionDetailView.as_view(), name="gestion"),

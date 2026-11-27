@@ -5,7 +5,6 @@ from decimal import Decimal
 from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
-from django.db.models import Sum
 from django.utils import timezone
 
 from apps.clientes.models import Cliente
@@ -16,8 +15,16 @@ CERO = Decimal("0")
 
 
 class Pago(AuditableModel):
-    """Recibo de dinero de un cliente. Puede aplicarse a una o varias facturas;
-    lo no aplicado queda como saldo a favor del cliente (`monto_sin_aplicar`)."""
+    """Pago de UNA factura (esquema simple).
+
+    - Si el monto es menor al saldo, la factura queda "pagada_parcial"
+      (o "vencida_pago_parcial" si ya venció); si cubre el saldo, "pagada".
+    - El cliente se obtiene de la factura. La moneda debe ser la de la factura.
+    - Un cobro que cubre varias facturas se registra como un pago por factura
+      (mismo N° de referencia / recibo).
+    - Los pagos reducen el CAPITAL de la factura; los intereses por mora se
+      calculan aparte y nunca se suman al capital (sin capitalización).
+    """
 
     class Medio(models.TextChoices):
         EFECTIVO = "efectivo", "Efectivo"
@@ -28,11 +35,13 @@ class Pago(AuditableModel):
         BILLETERA = "billetera", "Billetera electrónica / QR"
         RETENCION = "retencion", "Comprobante de retención de IVA"
 
-    cliente = models.ForeignKey(Cliente, on_delete=models.PROTECT, related_name="pagos")
-    fecha = models.DateField(help_text="Fecha valor del cobro (cheque diferido: fecha de acreditación).")
-    moneda = models.CharField(max_length=3, choices=Moneda.choices, default=Moneda.PYG)
+    MEDIOS_CON_REFERENCIA = (Medio.TRANSFERENCIA, Medio.CHEQUE, Medio.CHEQUE_DIFERIDO)
+
+    factura = models.ForeignKey(Factura, on_delete=models.PROTECT, related_name="pagos")
     monto = models.DecimalField(max_digits=18, decimal_places=2, validators=[MinValueValidator(Decimal("0.01"))])
+    fecha = models.DateField(help_text="Fecha valor del cobro (cheque diferido: fecha de acreditación).")
     medio = models.CharField(max_length=16, choices=Medio.choices)
+    moneda = models.CharField(max_length=3, choices=Moneda.choices, default=Moneda.PYG)
     referencia = models.CharField(max_length=80, blank=True, help_text="N° de transferencia, cheque o comprobante.")
     banco = models.CharField(max_length=80, blank=True)
     numero_recibo = models.CharField(max_length=20, blank=True)
@@ -43,53 +52,30 @@ class Pago(AuditableModel):
     creado_en = models.DateTimeField(auto_now_add=True)
     actualizado_en = models.DateTimeField(auto_now=True)
 
-    CAMPOS_AUDITADOS = ("cliente_id", "fecha", "moneda", "monto", "medio", "referencia", "anulado", "motivo_anulacion")
+    CAMPOS_AUDITADOS = ("factura_id", "fecha", "moneda", "monto", "medio", "referencia", "anulado", "motivo_anulacion")
 
     class Meta:
         db_table = "pagos"
         ordering = ["-fecha", "-id"]
+        indexes = [models.Index(fields=["factura", "anulado"])]
 
     def __str__(self):
-        return f"Pago #{self.pk} {self.cliente.razon_social} {self.moneda} {self.monto}"
+        return f"Pago #{self.pk} {self.factura.numero_completo} {self.moneda} {self.monto}"
 
     @property
-    def monto_aplicado(self) -> Decimal:
-        if not self.pk:
-            return CERO
-        return self.aplicaciones.aggregate(s=Sum("monto"))["s"] or CERO
-
-    @property
-    def monto_sin_aplicar(self) -> Decimal:
-        return CERO if self.anulado else self.monto - self.monto_aplicado
+    def cliente(self):
+        return self.factura.cliente
 
     def clean(self):
-        if self.medio in (self.Medio.CHEQUE, self.Medio.CHEQUE_DIFERIDO, self.Medio.TRANSFERENCIA) \
-                and not self.referencia:
-            raise ValidationError({"referencia": "Indique el N° de cheque o de transferencia."})
+        errores = {}
+        if self.factura_id and self.moneda != self.factura.moneda:
+            errores["moneda"] = f"La factura está en {self.factura.moneda}; el pago debe registrarse en la misma moneda."
+        if self.medio in self.MEDIOS_CON_REFERENCIA and not self.referencia:
+            errores["referencia"] = "Indique el N° de cheque o de transferencia."
         if self.anulado and not self.motivo_anulacion:
-            raise ValidationError({"motivo_anulacion": "Indique el motivo de la anulación."})
-
-
-class AplicacionPago(models.Model):
-    """Imputación de (parte de) un pago a una factura: concilia pagos parciales."""
-
-    pago = models.ForeignKey(Pago, on_delete=models.CASCADE, related_name="aplicaciones")
-    factura = models.ForeignKey(Factura, on_delete=models.PROTECT, related_name="aplicaciones")
-    monto = models.DecimalField(max_digits=18, decimal_places=2, validators=[MinValueValidator(Decimal("0.01"))])
-    creado_en = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        db_table = "pagos_aplicaciones"
-        ordering = ["id"]
-
-    def __str__(self):
-        return f"{self.monto} de pago #{self.pago_id} → {self.factura.numero_completo}"
-
-    def clean(self):
-        if self.pago.moneda != self.factura.moneda:
-            raise ValidationError("La moneda del pago debe coincidir con la de la factura.")
-        if self.pago.cliente_id != self.factura.cliente_id:
-            raise ValidationError("El pago y la factura deben ser del mismo cliente.")
+            errores["motivo_anulacion"] = "Indique el motivo de la anulación."
+        if errores:
+            raise ValidationError(errores)
 
 
 class ParametrosCobranza(AuditableModel):

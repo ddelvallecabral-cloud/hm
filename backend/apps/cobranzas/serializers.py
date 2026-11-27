@@ -1,40 +1,26 @@
 from django.core.exceptions import ValidationError as DjangoValidationError
-from decimal import Decimal
 
 from rest_framework import serializers
 
 from apps.facturacion.models import Factura
 
-from .models import AplicacionPago, GestionCobro, Pago
+from .models import GestionCobro, Pago
 
 
 def a_drf(e: DjangoValidationError):
     return serializers.ValidationError(getattr(e, "message_dict", None) or {"detalle": e.messages})
 
 
-class AplicacionPagoSerializer(serializers.ModelSerializer):
-    factura_numero = serializers.CharField(source="factura.numero_completo", read_only=True)
-
-    class Meta:
-        model = AplicacionPago
-        fields = ["id", "factura", "factura_numero", "monto", "creado_en"]
-
-
-class ImputacionSerializer(serializers.Serializer):
-    factura = serializers.PrimaryKeyRelatedField(queryset=Factura.objects.all())
-    monto = serializers.DecimalField(max_digits=18, decimal_places=2, min_value=0)
-
-
 class PagoSerializer(serializers.ModelSerializer):
-    aplicaciones = AplicacionPagoSerializer(many=True, read_only=True)
-    monto_aplicado = serializers.DecimalField(max_digits=18, decimal_places=2, read_only=True)
-    monto_sin_aplicar = serializers.DecimalField(max_digits=18, decimal_places=2, read_only=True)
-    cliente_razon_social = serializers.CharField(source="cliente.razon_social", read_only=True)
-    # Sólo para el alta:
-    imputaciones = ImputacionSerializer(many=True, write_only=True, required=False)
-    aplicar_automatico = serializers.BooleanField(
-        write_only=True, required=False, default=False,
-        help_text="Reparte el pago entre las facturas abiertas, de la más antigua a la más nueva.")
+    """Pago de una factura. Al crear: factura, monto, medio y opcionalmente fecha, moneda y referencia."""
+
+    factura_numero = serializers.CharField(source="factura.numero_completo", read_only=True)
+    cliente = serializers.IntegerField(source="factura.cliente_id", read_only=True)
+    cliente_razon_social = serializers.CharField(source="factura.cliente.razon_social", read_only=True)
+    factura_saldo = serializers.DecimalField(source="factura.saldo", max_digits=18, decimal_places=2, read_only=True)
+    factura_estado = serializers.CharField(source="factura.estado", read_only=True)
+    moneda = serializers.ChoiceField(choices=[("PYG", "PYG"), ("USD", "USD")], required=False)
+    fecha = serializers.DateField(required=False)
 
     class Meta:
         model = Pago
@@ -42,17 +28,18 @@ class PagoSerializer(serializers.ModelSerializer):
         read_only_fields = ["registrado_por", "anulado", "motivo_anulacion", "creado_en", "actualizado_en"]
 
     def validate(self, attrs):
-        if attrs.get("imputaciones") and attrs.get("aplicar_automatico"):
-            raise serializers.ValidationError("Use imputaciones manuales o aplicar_automatico, no ambos.")
+        f = attrs.get("factura")
+        if f and attrs.get("moneda") and attrs["moneda"] != f.moneda:
+            raise serializers.ValidationError({"moneda": f"La factura está en {f.moneda}."})
         return attrs
 
     def create(self, validated_data):
-        from .services import registrar_pago
+        from .services import registrar_cobranza
 
-        imputaciones = validated_data.pop("imputaciones", None)
-        automatico = validated_data.pop("aplicar_automatico", False)
+        datos = dict(validated_data)
         try:
-            return registrar_pago(validated_data, imputaciones, automatico, self.context["request"].user)
+            return registrar_cobranza(datos.pop("factura"), datos.pop("monto"), datos.pop("medio"),
+                                      fecha=datos.pop("fecha", None), usuario=self.context["request"].user, **datos)
         except DjangoValidationError as e:
             raise a_drf(e)
 
@@ -127,24 +114,4 @@ class RevisionGestionSerializer(serializers.Serializer):
     def validate(self, attrs):
         if attrs["decision"] == "modificada" and not attrs["mensaje_final"].strip():
             raise serializers.ValidationError({"mensaje_final": "Escriba el mensaje que se comunicará al cliente."})
-        return attrs
-
-
-class RegistrarCobranzaSerializer(serializers.Serializer):
-    """Pago de UNA factura: cliente y moneda se toman de la factura."""
-
-    factura = serializers.PrimaryKeyRelatedField(queryset=Factura.objects.select_related("cliente"))
-    monto = serializers.DecimalField(max_digits=18, decimal_places=2, min_value=Decimal("0.01"))
-    fecha = serializers.DateField(required=False)
-    medio = serializers.ChoiceField(choices=Pago.Medio.choices)
-    moneda = serializers.ChoiceField(choices=[("PYG", "PYG"), ("USD", "USD")], required=False)
-    referencia = serializers.CharField(required=False, allow_blank=True, default="")
-    banco = serializers.CharField(required=False, allow_blank=True, default="")
-    numero_recibo = serializers.CharField(required=False, allow_blank=True, default="")
-    observaciones = serializers.CharField(required=False, allow_blank=True, default="")
-
-    def validate(self, attrs):
-        f = attrs["factura"]
-        if attrs.get("moneda") and attrs["moneda"] != f.moneda:
-            raise serializers.ValidationError({"moneda": f"La factura está en {f.moneda}."})
         return attrs

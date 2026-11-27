@@ -16,8 +16,8 @@ from apps.facturacion.models import Factura
 
 from .recomendaciones import BUENAS_PRACTICAS, recomendacion_para
 from .serializers import (
-    CobroContadoSerializer, GestionActualizacionSerializer, GestionCobroSerializer, ImputacionSerializer,
-    PagoSerializer, RegistrarCobranzaSerializer, RevisionGestionSerializer, a_drf,
+    CobroContadoSerializer, GestionActualizacionSerializer, GestionCobroSerializer, PagoSerializer,
+    RevisionGestionSerializer, a_drf,
 )
 
 
@@ -30,34 +30,22 @@ def _filtrar(qs, params, campos):
 
 # ------------------------------- Pagos ---------------------------------- #
 class PagoListCreateView(generics.ListCreateAPIView):
-    """GET ?cliente= &moneda= &medio= &anulado=  ·  POST: registra un pago (tesorero)."""
+    """GET ?factura= &cliente= &moneda= &medio= &anulado=  ·  POST: pago de una factura (tesorero)."""
 
     serializer_class = PagoSerializer
     permission_classes = [LecturaTodosEscrituraTesorero]
 
     def get_queryset(self):
-        qs = Pago.objects.select_related("cliente").prefetch_related("aplicaciones__factura")
-        return _filtrar(qs, self.request.query_params, ("cliente", "moneda", "medio", "anulado"))
+        p = self.request.query_params
+        qs = _filtrar(Pago.objects.select_related("factura__cliente"), p, ("factura", "moneda", "medio", "anulado"))
+        if p.get("cliente"):
+            qs = qs.filter(factura__cliente_id=p["cliente"])
+        return qs
 
 
 class PagoDetailView(generics.RetrieveAPIView):
-    queryset = Pago.objects.select_related("cliente").prefetch_related("aplicaciones__factura")
+    queryset = Pago.objects.select_related("factura__cliente")
     serializer_class = PagoSerializer
-
-
-@api_view(["POST"])
-@permission_classes([LecturaTodosEscrituraTesorero])
-def aplicar_pago(request, pk):
-    """Aplica el saldo a favor de un pago: {"imputaciones": [{"factura": 1, "monto": "500000"}]}."""
-    pago = get_object_or_404(Pago, pk=pk)
-    ser = ImputacionSerializer(data=request.data.get("imputaciones", []), many=True)
-    ser.is_valid(raise_exception=True)
-    try:
-        services.aplicar_pago(pago, ser.validated_data)
-    except DjangoValidationError as e:
-        raise a_drf(e)
-    pago.refresh_from_db()
-    return Response(PagoSerializer(pago).data)
 
 
 @api_view(["POST"])
@@ -87,17 +75,12 @@ def cobro_contado(request):
 @api_view(["POST"])
 @permission_classes([LecturaTodosEscrituraTesorero])
 def registrar_cobranza(request):
-    """Pago de una factura: {"factura": 12, "monto": "4000000", "medio": "transferencia", "referencia": "…"}."""
-    ser = RegistrarCobranzaSerializer(data=request.data)
+    """Igual que POST /pagos/, pero devuelve además el resumen actualizado de la factura (lo usa la pantalla)."""
+    ser = PagoSerializer(data=request.data, context={"request": request})
     ser.is_valid(raise_exception=True)
-    datos = dict(ser.validated_data)
-    try:
-        pago = services.registrar_cobranza(datos.pop("factura"), datos.pop("monto"), datos.pop("medio"),
-                                           fecha=datos.pop("fecha", None), usuario=request.user, **datos)
-    except DjangoValidationError as e:
-        raise a_drf(e)
-    factura = pago.aplicaciones.get().factura
-    return Response({"pago": PagoSerializer(pago).data, "factura": _factura_resumen(factura)},
+    pago = ser.save()
+    pago.factura.refresh_from_db()
+    return Response({"pago": PagoSerializer(pago).data, "factura": _factura_resumen(pago.factura)},
                     status=status.HTTP_201_CREATED)
 
 

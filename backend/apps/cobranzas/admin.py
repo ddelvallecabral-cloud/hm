@@ -1,24 +1,24 @@
 from django.contrib import admin
 
-from .models import AplicacionPago, Feriado, GestionCobro, Pago, ParametrosCobranza
-
-
-class AplicacionInline(admin.TabularInline):
-    model = AplicacionPago
-    extra = 0
-    readonly_fields = ("factura", "monto", "creado_en")
-
-    def has_add_permission(self, request, obj=None):
-        return False  # se aplican desde la API para mantener saldos consistentes
+from .models import Feriado, GestionCobro, Pago, ParametrosCobranza
 
 
 @admin.register(Pago)
 class PagoAdmin(admin.ModelAdmin):
-    inlines = [AplicacionInline]
-    list_display = ("id", "cliente", "fecha", "moneda", "monto", "medio", "referencia", "anulado")
+    """Consulta de pagos. Se registran y anulan desde la pantalla o la API para mantener saldos y estados."""
+
+    list_display = ("id", "factura", "fecha", "moneda", "monto", "medio", "referencia", "anulado")
     list_filter = ("medio", "moneda", "anulado")
-    search_fields = ("cliente__razon_social", "referencia", "numero_recibo")
-    readonly_fields = ("anulado", "motivo_anulacion", "registrado_por")
+    search_fields = ("factura__cliente__razon_social", "factura__numero", "referencia", "numero_recibo")
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
 
 
 @admin.register(GestionCobro)
