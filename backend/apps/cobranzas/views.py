@@ -84,8 +84,23 @@ def registrar_cobranza(request):
                     status=status.HTTP_201_CREATED)
 
 
+def _interes_resumen(f: Factura) -> dict | None:
+    """Interés por mora informativo a hoy (no registra alertas). None si no aplica."""
+    from apps.intereses.services import ErrorTasaNoCargada, calcular_interes_moratorio
+
+    try:
+        r = calcular_interes_moratorio(f, registrar_alertas=False)
+    except ErrorTasaNoCargada as e:
+        return {"error": str(e)}
+    if not r["aplica"]:
+        return None
+    return {"interes": r["interes_acumulado"], "tasa_anual": r["tasa_aplicada_anual"], "dias": r["dias_atraso"],
+            "total_con_interes": r["total"], "tasa_ajustada": r["tasa_ajustada"], "alertas": r["alertas"]}
+
+
 def _factura_resumen(f: Factura) -> dict:
     return montos_a_texto({
+        "interes_mora": _interes_resumen(f),
         "id": f.pk, "numero": f.numero_completo, "cliente_id": f.cliente_id, "cliente": f.cliente.razon_social,
         "ruc": f.cliente.ruc, "fecha_emision": f.fecha_emision, "fecha_vencimiento": f.fecha_vencimiento,
         "condicion": f.condicion, "moneda": f.moneda, "total": f.total, "saldo": f.calcular_saldo_pendiente(),
