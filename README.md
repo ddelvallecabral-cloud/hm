@@ -5,10 +5,9 @@ crédito, facturas en **PYG** y **USD** con **IVA 10%**, clientes
 **particulares / profesionales / pymes**, datos compatibles con **SIFEN** e
 **intereses por mora** según los topes del **BCP**.
 
-> **Estado: esqueleto (etapa 1).** El repositorio contiene la estructura, la
-> configuración por entorno y la infraestructura para levantarlo. La lógica de
-> negocio (IVA, cobranzas, intereses, reportes) se implementa en las etapas
-> siguientes; ver [`docs/arquitectura.md`](docs/arquitectura.md).
+> **Estado: etapa 2 completa** — roles, auditoría, clientes y facturación.
+> Cobranzas, intereses por mora, tesorería y reportes se implementan en las
+> etapas siguientes; ver [`docs/arquitectura.md`](docs/arquitectura.md).
 
 ## Stack
 
@@ -174,6 +173,88 @@ desarrollo de Vite redirige `/api`).
 > jurídica emitido por un prestador habilitado y el CSC (código de seguridad)
 > que entrega la SET. Esas credenciales van sólo en variables de entorno o en
 > un gestor de secretos; los archivos `.p12/.pfx/.pem` están excluidos de git.
+
+## API disponible (etapa 2)
+
+Todas las rutas requieren sesión iniciada (en dev también acepta autenticación
+básica). Los montos se envían y devuelven como texto decimal.
+
+| Método | Ruta | Quién | Descripción |
+|---|---|---|---|
+| GET | `/api/health/` | público | Estado de la API y la base |
+| GET | `/api/core/me/` | todos | Usuario actual y rol |
+| GET | `/api/core/auditoria/` | administrador | Bitácora (`?modelo=facturacion.Factura&objeto_id=…&usuario=&accion=`) |
+| GET, POST | `/api/clientes/` | lectura todos / alta tesorero | Filtros `?tipo=&condicion_pago=&q=` |
+| GET, PATCH | `/api/clientes/<id>/` | lectura todos / edición tesorero | `motivo` opcional para la auditoría |
+| GET, POST | `/api/facturacion/ordenes-compra/` | lectura todos / alta tesorero | Sólo profesionales y pymes |
+| GET, POST | `/api/facturacion/facturas/` | lectura todos / alta tesorero | Alta con `items`; totales e IVA calculados |
+| GET, PATCH | `/api/facturacion/facturas/<id>/` | lectura todos / edición tesorero | Datos SIFEN, prórroga de vencimiento (con `motivo`), observaciones |
+| POST | `/api/facturacion/facturas/<id>/anular/` | tesorero | Requiere `motivo` |
+
+Ejemplo de alta de factura a crédito para una pyme:
+
+```json
+{
+  "cliente": 2, "orden_compra": 5,
+  "timbrado": "12345678", "establecimiento": "001", "punto_expedicion": "001", "numero": "0000123",
+  "fecha_emision": "2026-11-27", "condicion": "credito", "plazo_dias": 60, "moneda": "PYG",
+  "items": [
+    {"descripcion": "Varilla conformada 12 mm x 12 m", "unidad": "BARRA",
+     "cantidad": "100", "precio_unitario": "110000", "tasa_iva": 10, "precio_incluye_iva": true}
+  ]
+}
+```
+
+Respuesta (extracto): `gravada_10 = 10000000.00`, `iva_10 = 1000000.00`,
+`total = 11000000.00`, `fecha_vencimiento = 2027-01-26`.
+
+### Roles
+
+| Acción | Administrador | Tesorero | Cobrador |
+|---|:-:|:-:|:-:|
+| Consultar clientes, facturas y OC | ✔ | ✔ | ✔ |
+| Crear o editar clientes, facturas y OC | ✔ | ✔ | |
+| Anular facturas, cambiar vencimientos | ✔ | ✔ | |
+| Consultar la auditoría | ✔ | | |
+| Gestionar usuarios (admin de Django) | ✔ | | |
+
+El rol se asigna en `/admin/` → Usuarios. Un usuario con rol administrador
+obtiene acceso al admin de Django automáticamente.
+
+### Auditoría
+
+Clientes, órdenes de compra y facturas registran en la tabla `auditoria` cada
+alta, cambio y baja: usuario, IP, fecha y hora, campos con valor anterior y
+nuevo, y el motivo si se informó. En facturas se auditan estado, vencimiento,
+plazo, importes, OC, datos SIFEN y anulación. La bitácora no se puede editar
+ni borrar (tampoco desde el admin).
+
+### Reglas de negocio implementadas
+
+- **Clientes:** RUC con dígito verificador módulo 11 de la SET, obligatorio
+  para profesionales y pymes. Crédito sólo a 30, 60 o 90 días y con límite
+  mayor a 0. `requiere_orden_compra` se calcula a partir del tipo de cliente.
+- **IVA 10% (Ley 6380/2019):** cada ítem indica `precio_incluye_iva`. Si es
+  `true` (lo habitual en Paraguay) el IVA se **extrae** (total ÷ 11); si es
+  `false` se **suma**. El sistema nunca vuelve a aplicar IVA a un precio que ya
+  lo incluye, y antes de guardar verifica que el IVA corresponda a la base. Se
+  admiten 10%, 5% y exento. Guaraníes sin decimales y USD con 2.
+- **Orden de compra:** obligatoria para profesionales y pymes y rechazada para
+  particulares. Debe ser del mismo cliente y la misma moneda, y lo facturado no
+  puede superar su monto. Su estado (abierta / parcial / facturada) se actualiza solo.
+- **Crédito:** el cliente debe tener crédito habilitado y el plazo no puede
+  superar el pactado. El vencimiento se calcula como emisión + plazo. La deuda
+  abierta más la nueva factura, convertida a guaraníes, no puede superar el
+  límite de crédito.
+- **USD:** se exige tipo de cambio, que se usa para el límite de crédito y
+  luego para el reporte de IVA.
+- **Retención de IVA:** `porcentaje_retencion_iva` informado por factura
+  (verificar el porcentaje en la resolución vigente de la SET).
+- **SIFEN:** se registran CDC (44 dígitos con dígito verificador), timbrado,
+  establecimiento, punto de expedición, estado del documento, respuesta de la
+  SET y KuDE. Un documento aprobado no se puede modificar ni anular desde el
+  CRM: primero hay que registrar la cancelación ante la SET. La emisión y el
+  envío del XML **no** están implementados (ver nota SIFEN más arriba).
 
 ## Próximas etapas
 

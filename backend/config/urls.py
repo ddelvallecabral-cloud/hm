@@ -3,7 +3,7 @@ from django.urls import include, path
 
 from apps.core.views import health
 
-API_MODULOS = ["clientes", "facturacion", "cobranzas", "intereses", "tesoreria", "reportes"]
+API_MODULOS = ["core", "clientes", "facturacion", "cobranzas", "intereses", "tesoreria", "reportes"]
 
 urlpatterns = [
     path("admin/", admin.site.urls),

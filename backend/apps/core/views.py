@@ -1,7 +1,12 @@
 from django.db import connection
+from rest_framework import generics
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
+
+from .models import AuditLog
+from .permissions import SoloAdministrador
+from .serializers import AuditLogSerializer, UsuarioActualSerializer
 
 
 @api_view(["GET"])
@@ -16,3 +21,26 @@ def health(request):
         db = "error"
     return Response({"status": "ok" if db == "ok" else "degraded", "database": db},
                     status=200 if db == "ok" else 503)
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def me(request):
+    """Usuario logueado y su rol (el frontend lo usa para mostrar/ocultar acciones)."""
+    return Response(UsuarioActualSerializer(request.user).data)
+
+
+class AuditLogListView(generics.ListAPIView):
+    """Bitácora (sólo administradores). Filtros: ?modelo=facturacion.Factura &objeto_id= &usuario= &accion="""
+
+    serializer_class = AuditLogSerializer
+    permission_classes = [SoloAdministrador]
+
+    def get_queryset(self):
+        qs = AuditLog.objects.all()
+        p = self.request.query_params
+        for campo, filtro in (("modelo", "modelo"), ("objeto_id", "objeto_id"), ("accion", "accion"),
+                              ("usuario", "usuario_nombre")):
+            if p.get(campo):
+                qs = qs.filter(**{filtro: p[campo]})
+        return qs

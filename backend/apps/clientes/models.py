@@ -4,10 +4,12 @@ from django.core.exceptions import ValidationError
 from django.core.validators import MinValueValidator
 from django.db import models
 
+from apps.core.models import AuditableModel
+
 from .validators import validar_ruc
 
 
-class Cliente(models.Model):
+class Cliente(AuditableModel):
     class Tipo(models.TextChoices):
         PARTICULAR = "particular", "Particular (consumidor final)"
         PROFESIONAL_INDEPENDIENTE = "profesional_independiente", "Profesional independiente"

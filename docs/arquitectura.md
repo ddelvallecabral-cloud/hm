@@ -24,10 +24,12 @@ Dependencias entre módulos: `core` ← `clientes` ← `facturacion` ← `cobran
 
 ## Plan de etapas
 
-1. **Esqueleto** (este commit): estructura, entornos, Docker, health check.
-2. **Núcleo y seguridad**: roles, permisos por rol, auditoría.
-3. **Clientes y facturación**: tipos de cliente, OC condicional, IVA 10% con validación anti doble imposición, campos SIFEN.
-4. **Cobranzas**: contado, crédito, pagos parciales, gestiones de cobro.
-5. **Intereses por mora**: tasas BCP, motor de cálculo, simulador.
-6. **Tesorería y reportes**: panel e informes.
-7. **Frontend** por módulo e **integración SIFEN** real.
+1. ✅ **Esqueleto**: estructura, entornos, Docker, health check.
+2. ✅ **Roles, auditoría, clientes y facturación**: permisos por rol, bitácora
+   inmutable, tipos de cliente, OC condicional, IVA 10% con validación contra
+   doble imposición, límite de crédito, campos SIFEN.
+3. **Cobranzas**: cobro al contado, pagos parciales con imputación a capital o
+   intereses, gestiones de cobro no intimidatorias, promesas de pago.
+4. **Intereses por mora**: tasas BCP, motor de cálculo, simulador.
+5. **Tesorería y reportes**: DSO, aging, flujo de caja, IVA por período, morosidad.
+6. **Frontend** por módulo e **integración SIFEN** real.

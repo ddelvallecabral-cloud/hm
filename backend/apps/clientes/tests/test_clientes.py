@@ -41,7 +41,7 @@ class ClienteModeloTest(TestCase):
 class ClienteApiTest(TestCase):
     def setUp(self):
         self.api = APIClient()
-        self.api.force_authenticate(get_user_model().objects.create_user("tesorero", password="x" * 12))
+        self.api.force_authenticate(get_user_model().objects.create_user("tesorero", password="x" * 12, rol="tesorero"))
 
     def test_requiere_autenticacion(self):
         self.assertEqual(APIClient().get(URL).status_code, 403)
